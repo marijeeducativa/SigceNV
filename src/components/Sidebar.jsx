@@ -36,6 +36,7 @@ function Sidebar() {
                 <SidebarItem icon="⚙️" text="Configuración" to="/configuracion" />
                 <SidebarItem icon="👥" text="Usuarios" to="/usuarios" />
                 <SidebarItem icon="🏫" text="Estructura Académica" to="/estructura" />
+                <SidebarItem icon="👨‍🏫" text="Asignaciones" to="/asignaciones" />
               </>
             )}
             <SidebarItem icon="📋" text="Plantillas de Criterios" to="/plantillas" />

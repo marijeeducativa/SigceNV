@@ -10,6 +10,7 @@ import DashboardCoordinador from './pages/DashboardCoordinador';
 import Configuracion from './pages/Configuracion';
 import Usuarios from './pages/Usuarios';
 import Estructura from './pages/Estructura';
+import Asignaciones from './pages/Asignaciones';
 import Plantillas from './pages/Plantillas';
 import Calificaciones from './pages/Calificaciones';
 import Observaciones from './pages/Observaciones';
@@ -84,12 +85,13 @@ function App() {
   <Route path="/configuracion" element={<ProtectedLayout><Configuracion /></ProtectedLayout>} />
   <Route path="/usuarios" element={<ProtectedLayout><Usuarios /></ProtectedLayout>} />
   <Route path="/estructura" element={<ProtectedLayout><Estructura /></ProtectedLayout>} />
+  <Route path="/asignaciones" element={<ProtectedLayout><Asignaciones /></ProtectedLayout>} />
   <Route path="/plantillas" element={<ProtectedLayout><Plantillas /></ProtectedLayout>} />
   <Route path="/calificaciones" element={<ProtectedLayout><Calificaciones /></ProtectedLayout>} />
   <Route path="/observaciones" element={<ProtectedLayout><Observaciones /></ProtectedLayout>} />
   <Route path="/reportes" element={<ProtectedLayout><Reportes /></ProtectedLayout>} />
   <Route path="*" element={<Navigate to="/" replace />} />
-</Routes>
+  </Routes>
       </Router>
       <style>{`
         @keyframes spin {
