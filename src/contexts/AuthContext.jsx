@@ -10,28 +10,62 @@ export const AuthProvider = ({ children }) => {
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    // Verificar sesión al cargar
-    checkSession();
+useEffect(() => {
+  let mounted = true;
 
-    // Escuchar cambios de autenticación
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('🔄 Auth state change:', event, session?.user?.id);
+  const initSession = async () => {
+    try {
+      console.log('🔑 Iniciando sesión...');
+      const { data: { session }, error } = await supabase.auth.getSession();
       
+      console.log('📊 Sesión obtenida:', { session: !!session, error });
+
+      if (!mounted) return;
+
+      if (error) throw error;
+
       if (session?.user) {
         setUser(session.user);
         await loadProfile(session.user.id);
       } else {
+        console.log('⚠️ No hay sesión activa');
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error('❌ Error en initSession:', error);
+      if (mounted) {
+        setLoading(false);
+      }
+    }
+  };
+
+  initSession();
+
+  const { data: { subscription } } = supabase.auth.onAuthStateChange(
+    async (event, session) => {
+      if (!mounted) return;
+
+      console.log('🔄 Auth state change:', event);
+      
+      if (event === 'SIGNED_IN' && session?.user) {
+        setUser(session.user);
+        await loadProfile(session.user.id);
+      } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setUserProfile(null);
         setLoading(false);
+      } else if (event === 'TOKEN_REFRESHED' && session?.user) {
+        setUser(session.user);
+        // NO recargar perfil, solo actualizar token
       }
-    });
+    }
+  );
 
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
+  return () => {
+    mounted = false;
+    subscription?.unsubscribe();
+  };
+}, []);
 
   const checkSession = async () => {
     try {
@@ -50,28 +84,38 @@ export const AuthProvider = ({ children }) => {
   };
 
  const loadProfile = async (userId) => {
+  if (!userId) {
+    console.error('❌ userId es undefined');
+    setLoading(false);
+    return;
+  }
+
   try {
     console.log('🔍 Cargando perfil para userId:', userId);
     
-    // Timeout de 5 segundos
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Timeout')), 5000)
-    );
-    
+    // Crear timeout de 10 segundos
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Timeout después de 10 segundos')), 10000);
+    });
+
+    // Crear la consulta
     const queryPromise = supabase
       .from('usuarios')
       .select('*')
       .eq('id', userId)
-      .single();
+      .maybeSingle();
 
-    const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+    // Ejecutar con timeout
+    const { data, error } = await Promise.race([
+      queryPromise,
+      timeoutPromise.then(() => ({ data: null, error: new Error('Timeout') }))
+    ]);
 
-    console.log('📊 Resultado de perfil:', { data, error });
+    console.log('📊 Resultado:', { data, error });
 
     if (error) {
-      console.error('❌ Error en loadProfile:', error);
+      console.error('❌ Error en loadProfile:', error.message);
       setUserProfile(null);
-      setLoading(false);
       return;
     }
 
@@ -83,10 +127,10 @@ export const AuthProvider = ({ children }) => {
       setUserProfile(null);
     }
   } catch (error) {
-    console.error('❌ Error/Timeout en loadProfile:', error.message);
+    console.error('❌ Catch error:', error.message);
     setUserProfile(null);
   } finally {
-    console.log('🏁 Finalizando loadProfile');
+    console.log('🏁 Finalizando loadProfile - setLoading(false)');
     setLoading(false);
   }
 };

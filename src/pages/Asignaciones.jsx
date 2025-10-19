@@ -9,8 +9,8 @@ function Asignaciones() {
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
-    profesor_id: '',
-    curso_id: ''
+    user_id: '',
+    curso_ids: [] // CAMBIO: Ahora es un array
   });
   const [message, setMessage] = useState({ type: '', text: '' });
 
@@ -22,7 +22,6 @@ function Asignaciones() {
     try {
       setLoading(true);
 
-      // 1. Cargar asignaciones
       const { data: asignacionesData, error: asignacionesError } = await supabase
         .from('asignaciones')
         .select('*')
@@ -30,7 +29,6 @@ function Asignaciones() {
 
       if (asignacionesError) throw asignacionesError;
 
-      // 2. Cargar profesores
       const { data: profesoresData, error: profesoresError } = await supabase
         .from('usuarios')
         .select('*')
@@ -39,61 +37,68 @@ function Asignaciones() {
 
       if (profesoresError) throw profesoresError;
 
-      // 3. Cargar cursos
       const { data: cursosData, error: cursosError } = await supabase
         .from('cursos')
         .select('*');
 
       if (cursosError) throw cursosError;
 
-      // 4. Cargar grupos
       const { data: gruposData, error: gruposError } = await supabase
         .from('grupos')
         .select('*');
 
       if (gruposError) throw gruposError;
 
-      // 5. Cargar asignaturas
       const { data: asignaturasData, error: asignaturasError } = await supabase
         .from('asignaturas')
         .select('*');
 
       if (asignaturasError) throw asignaturasError;
 
-      // 6. Combinar datos
-      const asignacionesConDatos = (asignacionesData || []).map(asignacion => {
-        const profesor = profesoresData.find(p => p.id === asignacion.profesor_id);
-        const curso = cursosData.find(c => c.id === asignacion.curso_id);
-        const grupo = gruposData.find(g => g.id === curso?.grupo_id);
-        const asignatura = asignaturasData.find(a => a.id === curso?.asignatura_id);
+ const asignacionesConDatos = (asignacionesData || []).map(asignacion => {
+  const profesor = profesoresData.find(p => p.id === asignacion.user_id);
+  const curso = cursosData.find(c => c.id === asignacion.curso_id);
+  const grupo = gruposData.find(g => g.id === curso?.grupo_id);
+  const asignatura = asignaturasData.find(a => a.id === curso?.asignatura_id);
 
-        return {
-          ...asignacion,
-          profesor,
-          curso: {
-            ...curso,
-            grupo,
-            asignatura
-          }
-        };
-      });
+  // Generar nombre del grupo
+  if (grupo) {
+    grupo.nombre = `${grupo.nivel} ${grupo.grado}${grupo.seccion}`;
+  }
+
+  return {
+    ...asignacion,
+    profesor,
+    curso: {
+      ...curso,
+      grupo,
+      asignatura
+    }
+  };
+});
 
       setAsignaciones(asignacionesConDatos);
       setProfesores(profesoresData || []);
       
-      // Preparar cursos con nombres completos
-      const cursosConInfo = (cursosData || []).map(curso => {
-        const grupo = gruposData.find(g => g.id === curso.grupo_id);
-        const asignatura = asignaturasData.find(a => a.id === curso.asignatura_id);
-        return { 
-          ...curso, 
-          grupo,
-          asignatura,
-          nombre_completo: `${asignatura?.nombre || 'Sin asignatura'} - ${grupo?.nombre || 'Sin grupo'}`
-        };
-      });
-      
-      setCursos(cursosConInfo);
+// Preparar cursos con nombres completos
+const cursosConInfo = (cursosData || []).map(curso => {
+  const grupo = gruposData.find(g => g.id === curso.grupo_id);
+  const asignatura = asignaturasData.find(a => a.id === curso.asignatura_id);
+  
+  // Generar nombre del grupo
+  const nombreGrupo = grupo 
+    ? `${grupo.nivel} ${grupo.grado}${grupo.seccion}` 
+    : 'Sin grupo';
+  
+  return { 
+    ...curso, 
+    grupo: { ...grupo, nombre: nombreGrupo },
+    asignatura,
+    nombre_completo: `${asignatura?.nombre || 'Sin asignatura'} - ${nombreGrupo}`
+  };
+});
+
+setCursos(cursosConInfo);
     } catch (error) {
       console.error('Error cargando datos:', error);
       setMessage({ type: 'error', text: 'Error al cargar datos: ' + error.message });
@@ -105,40 +110,53 @@ function Asignaciones() {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    if (formData.curso_ids.length === 0) {
+      setMessage({ type: 'error', text: '⚠️ Debes seleccionar al menos un curso' });
+      return;
+    }
+
     try {
       setSaving(true);
       setMessage({ type: '', text: '' });
 
-      // Verificar si ya existe la asignación
-      const { data: existente } = await supabase
+      // Verificar asignaciones existentes
+      const { data: existentes } = await supabase
         .from('asignaciones')
-        .select('id')
-        .eq('profesor_id', formData.profesor_id)
-        .eq('curso_id', formData.curso_id)
-        .maybeSingle();
+        .select('curso_id')
+        .eq('user_id', formData.user_id)
+        .in('curso_id', formData.curso_ids);
 
-      if (existente) {
-        setMessage({ type: 'error', text: '⚠️ Esta asignación ya existe' });
+      const cursosExistentes = existentes?.map(e => e.curso_id) || [];
+      const cursosNuevos = formData.curso_ids.filter(id => !cursosExistentes.includes(id));
+
+      if (cursosNuevos.length === 0) {
+        setMessage({ type: 'error', text: '⚠️ Todas las asignaciones ya existen' });
         setSaving(false);
         return;
       }
 
-      // Crear asignación
+      // Crear asignaciones múltiples
+      const asignacionesNuevas = cursosNuevos.map(curso_id => ({
+        user_id: formData.user_id,
+        curso_id
+      }));
+
       const { error } = await supabase
         .from('asignaciones')
-        .insert([{
-          profesor_id: formData.profesor_id,
-          curso_id: formData.curso_id
-        }]);
+        .insert(asignacionesNuevas);
 
       if (error) throw error;
 
-      setMessage({ type: 'success', text: '✅ Asignación creada exitosamente' });
+      const mensaje = cursosExistentes.length > 0 
+        ? `✅ ${cursosNuevos.length} asignación(es) creada(s). ${cursosExistentes.length} ya existía(n).`
+        : `✅ ${cursosNuevos.length} asignación(es) creada(s) exitosamente`;
+
+      setMessage({ type: 'success', text: mensaje });
       setShowModal(false);
       await loadData();
       resetForm();
     } catch (error) {
-      console.error('Error guardando asignación:', error);
+      console.error('Error guardando asignaciones:', error);
       setMessage({ type: 'error', text: 'Error: ' + error.message });
     } finally {
       setSaving(false);
@@ -166,16 +184,41 @@ function Asignaciones() {
 
   const resetForm = () => {
     setFormData({
-      profesor_id: '',
-      curso_id: ''
+      user_id: '',
+      curso_ids: []
     });
   };
 
-  const handleChange = (e) => {
-    const { name, value } = e.target;
+  const handleProfesorChange = (e) => {
     setFormData(prev => ({
       ...prev,
-      [name]: value
+      user_id: e.target.value
+    }));
+  };
+
+  const handleCursoToggle = (cursoId) => {
+    setFormData(prev => {
+      const yaSeleccionado = prev.curso_ids.includes(cursoId);
+      return {
+        ...prev,
+        curso_ids: yaSeleccionado
+          ? prev.curso_ids.filter(id => id !== cursoId)
+          : [...prev.curso_ids, cursoId]
+      };
+    });
+  };
+
+  const seleccionarTodos = () => {
+    setFormData(prev => ({
+      ...prev,
+      curso_ids: cursos.map(c => c.id)
+    }));
+  };
+
+  const deseleccionarTodos = () => {
+    setFormData(prev => ({
+      ...prev,
+      curso_ids: []
     }));
   };
 
@@ -201,7 +244,7 @@ function Asignaciones() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', borderBottom: '2px solid #667eea', paddingBottom: '1rem' }}>
         <div>
           <h1 style={{ color: '#667eea', marginBottom: '0.5rem' }}>👨‍🏫 Asignación de Cursos</h1>
-          <p style={{ color: '#666', margin: 0 }}>Asigna cursos a los profesores del sistema</p>
+          <p style={{ color: '#666', margin: 0 }}>Asigna múltiples cursos a profesores en una sola operación</p>
         </div>
         <button
           onClick={() => { setShowModal(true); resetForm(); }}
@@ -312,20 +355,21 @@ function Asignaciones() {
             background: 'white',
             padding: '2rem',
             borderRadius: '10px',
-            maxWidth: '500px',
-            width: '90%'
+            maxWidth: '600px',
+            width: '90%',
+            maxHeight: '80vh',
+            overflow: 'auto'
           }}>
-            <h2 style={{ marginTop: 0, color: '#667eea' }}>➕ Nueva Asignación</h2>
+            <h2 style={{ marginTop: 0, color: '#667eea' }}>➕ Nueva Asignación Múltiple</h2>
 
             <form onSubmit={handleSubmit}>
-              <div style={{ marginBottom: '1rem' }}>
+              <div style={{ marginBottom: '1.5rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
                   Profesor *
                 </label>
                 <select
-                  name="profesor_id"
-                  value={formData.profesor_id}
-                  onChange={handleChange}
+                  value={formData.user_id}
+                  onChange={handleProfesorChange}
                   required
                   style={{
                     width: '100%',
@@ -345,34 +389,97 @@ function Asignaciones() {
                 </select>
               </div>
 
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
-                  Curso (Asignatura - Grupo) *
-                </label>
-                <select
-                  name="curso_id"
-                  value={formData.curso_id}
-                  onChange={handleChange}
-                  required
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem',
-                    border: '2px solid #e1e8ed',
-                    borderRadius: '8px',
-                    fontSize: '1rem',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <option value="">Selecciona un curso</option>
+              <div style={{ marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <label style={{ fontWeight: '600' }}>
+                    Cursos * ({formData.curso_ids.length} seleccionados)
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      onClick={seleccionarTodos}
+                      style={{
+                        padding: '0.25rem 0.75rem',
+                        background: '#28a745',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        fontWeight: '600'
+                      }}
+                    >
+                      ✅ Todos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={deseleccionarTodos}
+                      style={{
+                        padding: '0.25rem 0.75rem',
+                        background: '#6c757d',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        fontWeight: '600'
+                      }}
+                    >
+                      ❌ Ninguno
+                    </button>
+                  </div>
+                </div>
+                
+                <div style={{
+                  border: '2px solid #e1e8ed',
+                  borderRadius: '8px',
+                  maxHeight: '300px',
+                  overflow: 'auto',
+                  padding: '0.5rem'
+                }}>
                   {cursos.map(curso => (
-                    <option key={curso.id} value={curso.id}>
-                      {curso.nombre_completo}
-                    </option>
+                    <label
+                      key={curso.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '0.75rem',
+                        margin: '0.25rem 0',
+                        background: formData.curso_ids.includes(curso.id) ? '#e7f3ff' : 'white',
+                        border: `2px solid ${formData.curso_ids.includes(curso.id) ? '#667eea' : '#e1e8ed'}`,
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseOver={(e) => {
+                        if (!formData.curso_ids.includes(curso.id)) {
+                          e.currentTarget.style.background = '#f8f9fa';
+                        }
+                      }}
+                      onMouseOut={(e) => {
+                        if (!formData.curso_ids.includes(curso.id)) {
+                          e.currentTarget.style.background = 'white';
+                        }
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={formData.curso_ids.includes(curso.id)}
+                        onChange={() => handleCursoToggle(curso.id)}
+                        style={{
+                          marginRight: '0.75rem',
+                          width: '18px',
+                          height: '18px',
+                          cursor: 'pointer'
+                        }}
+                      />
+                      <span style={{ fontWeight: '500' }}>{curso.nombre_completo}</span>
+                    </label>
                   ))}
-                </select>
+                </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '1rem', borderTop: '2px solid #f0f0f0', paddingTop: '1rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', borderTop: '2px solid #f0f0f0', paddingTop: '1rem', marginTop: '1.5rem' }}>
                 <button
                   type="submit"
                   disabled={saving}
@@ -387,7 +494,7 @@ function Asignaciones() {
                     fontWeight: '600'
                   }}
                 >
-                  {saving ? '💾 Guardando...' : '💾 Guardar'}
+                  {saving ? '💾 Guardando...' : `💾 Asignar ${formData.curso_ids.length} Curso(s)`}
                 </button>
                 <button
                   type="button"

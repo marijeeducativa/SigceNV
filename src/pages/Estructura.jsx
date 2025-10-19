@@ -118,7 +118,7 @@ function GruposTab() {
     try {
       setLoading(true);
       
-      // Cargar grupos
+// Cargar grupos
       const { data: gruposData, error: gruposError } = await supabase
         .from('grupos')
         .select('*')
@@ -127,6 +127,7 @@ function GruposTab() {
         .order('seccion', { ascending: true });
 
       if (gruposError) throw gruposError;
+ // ...existing code...
 
       // Cargar profesores para el selector
       const { data: profesoresData, error: profesoresError } = await supabase
@@ -745,9 +746,8 @@ function Modal({ onClose, children }) {
   );
 }
 
-// Placeholder para las tabs que faltan
 // ============================================
-// TAB 3: CURSOS
+// TAB 3: CURSOS (Relación Grupo-Asignatura)
 // ============================================
 function CursosTab() {
   const [cursos, setCursos] = useState([]);
@@ -755,38 +755,36 @@ function CursosTab() {
   const [asignaturas, setAsignaturas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editingCurso, setEditingCurso] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
+  const [error, setError] = useState('');
   const [formData, setFormData] = useState({
     grupo_id: '',
-    asignatura_id: ''
+    asignatura_ids: [] // Array para selección múltiple
   });
 
   useEffect(() => {
     loadData();
   }, []);
 
+// ...existing code...
   const loadData = async () => {
     try {
       setLoading(true);
-      
-      // Cargar cursos con sus relaciones
+
       const { data: cursosData, error: cursosError } = await supabase
         .from('cursos')
-        .select(`
-          *,
-          grupos (nivel, grado, seccion),
-          asignaturas (nombre)
-        `)
+        .select('*')
         .order('created_at', { ascending: false });
 
       if (cursosError) throw cursosError;
 
       // Cargar grupos
-      const { data: gruposData, error: gruposError } = await supabase
-        .from('grupos')
-        .select('*')
-        .order('nivel', { ascending: true })
-        .order('grado', { ascending: true });
+const { data: gruposData, error: gruposError } = await supabase
+  .from('grupos')
+  .select('*')
+  .order('nivel, grado, seccion');
 
       if (gruposError) throw gruposError;
 
@@ -798,116 +796,199 @@ function CursosTab() {
 
       if (asignaturasError) throw asignaturasError;
 
-      setCursos(cursosData || []);
-      setGrupos(gruposData || []);
-      setAsignaturas(asignaturasData || []);
+      // Combinar datos y generar nombre del grupo
+      const cursosConInfo = (cursosData || []).map(curso => {
+        const grupo = (gruposData || []).find(g => g.id === curso.grupo_id) || null;
+        const asignatura = (asignaturasData || []).find(a => a.id === curso.asignatura_id) || null;
+        if (grupo) {
+          grupo.nombre = `${grupo.nivel} ${grupo.grado}${grupo.seccion}`;
+        }
+        return { ...curso, grupo, asignatura };
+      });
+
+      setCursos(cursosConInfo);
+const gruposConNombre = (gruposData || []).map(g => ({
+  ...g,
+  nombre: `${g.nivel} ${g.grado}${g.seccion}`
+}));
+
+setGrupos(gruposConNombre);
+setAsignaturas(asignaturasData || []);
     } catch (error) {
-      console.error('Error:', error);
-      setMessage({ type: 'error', text: 'Error al cargar datos' });
+      console.error('Error cargando datos:', error);
+      setMessage({ type: 'error', text: 'Error al cargar: ' + (error.message || error) });
     } finally {
       setLoading(false);
     }
   };
-
-  const handleCreate = () => {
-    setFormData({ grupo_id: '', asignatura_id: '' });
-    setShowModal(true);
-    setMessage({ type: '', text: '' });
-  };
+// ...existing code...
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
+    if (formData.asignatura_ids.length === 0) {
+      setError('⚠️ Debes seleccionar al menos una asignatura');
+      return;
+    }
+
     try {
-      setLoading(true);
+      setSaving(true);
+      setError('');
 
-      // Verificar si ya existe la combinación
-      const { data: existing } = await supabase
-        .from('cursos')
-        .select('id')
-        .eq('grupo_id', formData.grupo_id)
-        .eq('asignatura_id', formData.asignatura_id)
-        .single();
+      if (editingCurso) {
+        // EDITAR (un solo curso)
+        const { error } = await supabase
+          .from('cursos')
+          .update({
+            grupo_id: formData.grupo_id,
+            asignatura_id: formData.asignatura_ids[0]
+          })
+          .eq('id', editingCurso.id);
 
-      if (existing) {
-        setMessage({ type: 'error', text: '❌ Este curso ya existe' });
-        setLoading(false);
-        return;
+        if (error) throw error;
+
+        setMessage({ type: 'success', text: '✅ Curso actualizado exitosamente' });
+      } else {
+        // CREAR MÚLTIPLES CURSOS
+        const { data: existentes } = await supabase
+          .from('cursos')
+          .select('asignatura_id')
+          .eq('grupo_id', formData.grupo_id)
+          .in('asignatura_id', formData.asignatura_ids);
+
+        const asignaturasExistentes = existentes?.map(e => e.asignatura_id) || [];
+        const asignaturasNuevas = formData.asignatura_ids.filter(id => !asignaturasExistentes.includes(id));
+
+        if (asignaturasNuevas.length === 0) {
+          setError('⚠️ Todos los cursos ya existen para este grupo');
+          setSaving(false);
+          return;
+        }
+
+        const cursosNuevos = asignaturasNuevas.map(asignatura_id => ({
+          grupo_id: formData.grupo_id,
+          asignatura_id
+        }));
+
+        const { error } = await supabase
+          .from('cursos')
+          .insert(cursosNuevos);
+
+        if (error) throw error;
+
+        const mensaje = asignaturasExistentes.length > 0
+          ? `✅ ${asignaturasNuevas.length} curso(s) creado(s). ${asignaturasExistentes.length} ya existía(n).`
+          : `✅ ${asignaturasNuevas.length} curso(s) creado(s) exitosamente`;
+
+        setMessage({ type: 'success', text: mensaje });
       }
 
-      const { error } = await supabase
-        .from('cursos')
-        .insert({
-          grupo_id: formData.grupo_id,
-          asignatura_id: formData.asignatura_id
-        });
-
-      if (error) throw error;
-      
-      setMessage({ type: 'success', text: '✅ Curso creado' });
-      await loadData();
       setShowModal(false);
+      await loadData();
+      resetForm();
     } catch (error) {
-      console.error('Error:', error);
-      setMessage({ type: 'error', text: '❌ ' + error.message });
+      console.error('Error guardando curso:', error);
+      setError('Error: ' + error.message);
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (curso) => {
-    const descripcion = `${curso.asignaturas.nombre} - ${curso.grupos.grado}° ${curso.grupos.seccion}`;
-    if (!confirm(`¿Eliminar ${descripcion}?`)) return;
+  const handleEdit = (curso) => {
+    setEditingCurso(curso);
+    setFormData({
+      grupo_id: curso.grupo_id,
+      asignatura_ids: [curso.asignatura_id]
+    });
+    setShowModal(true);
+    setError('');
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('¿Estás seguro de eliminar este curso?')) return;
 
     try {
-      setLoading(true);
       const { error } = await supabase
         .from('cursos')
         .delete()
-        .eq('id', curso.id);
+        .eq('id', id);
 
       if (error) throw error;
-      setMessage({ type: 'success', text: '✅ Curso eliminado' });
+
+      setMessage({ type: 'success', text: '✅ Curso eliminado exitosamente' });
       await loadData();
     } catch (error) {
-      console.error('Error:', error);
-      setMessage({ type: 'error', text: '❌ ' + error.message });
-    } finally {
-      setLoading(false);
+      console.error('Error eliminando curso:', error);
+      setMessage({ type: 'error', text: 'Error al eliminar: ' + error.message });
     }
   };
 
-  if (loading && cursos.length === 0) {
-    return <div style={{ padding: '2rem', textAlign: 'center' }}>Cargando...</div>;
+  const resetForm = () => {
+    setFormData({
+      grupo_id: '',
+      asignatura_ids: []
+    });
+    setEditingCurso(null);
+    setError('');
+  };
+
+  const handleAsignaturaToggle = (asignaturaId) => {
+    setFormData(prev => {
+      const yaSeleccionada = prev.asignatura_ids.includes(asignaturaId);
+      return {
+        ...prev,
+        asignatura_ids: yaSeleccionada
+          ? prev.asignatura_ids.filter(id => id !== asignaturaId)
+          : [...prev.asignatura_ids, asignaturaId]
+      };
+    });
+  };
+
+  const seleccionarTodas = () => {
+    setFormData(prev => ({
+      ...prev,
+      asignatura_ids: asignaturas.map(a => a.id)
+    }));
+  };
+
+  const deseleccionarTodas = () => {
+    setFormData(prev => ({
+      ...prev,
+      asignatura_ids: []
+    }));
+  };
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '3rem' }}>
+        <div style={{
+          width: '50px',
+          height: '50px',
+          border: '4px solid #f3f3f3',
+          borderTop: '4px solid #667eea',
+          borderRadius: '50%',
+          margin: '0 auto',
+          animation: 'spin 1s linear infinite'
+        }}></div>
+        <p>Cargando cursos...</p>
+      </div>
+    );
   }
 
   return (
     <div>
-      <div style={{ 
-        background: '#e3f2fd', 
-        padding: '1rem', 
-        borderRadius: '8px', 
-        marginBottom: '1.5rem',
-        border: '1px solid #90caf9'
-      }}>
-        <p style={{ margin: 0, color: '#1976d2' }}>
-          ℹ️ <strong>Los cursos</strong> son la asociación entre un <strong>Grupo</strong> y una <strong>Asignatura</strong>. 
-          Por ejemplo: "Matemáticas de 4to A"
-        </p>
-      </div>
-
-      <div style={{ marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+        <h2 style={{ margin: 0 }}>🔗 Cursos (Grupo + Asignatura)</h2>
         <button
-          onClick={handleCreate}
+          onClick={() => { setShowModal(true); resetForm(); }}
           style={{
             padding: '0.75rem 1.5rem',
             background: '#667eea',
             color: 'white',
             border: 'none',
             borderRadius: '8px',
-            fontSize: '1rem',
-            fontWeight: '600',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            fontWeight: '600'
           }}
         >
           ➕ Nuevo Curso
@@ -918,164 +999,267 @@ function CursosTab() {
         <div style={{
           padding: '1rem',
           borderRadius: '8px',
-          marginBottom: '1rem',
+          marginBottom: '1.5rem',
           background: message.type === 'success' ? '#d4edda' : '#f8d7da',
-          color: message.type === 'success' ? '#155724' : '#721c24'
+          color: message.type === 'success' ? '#155724' : '#721c24',
+          border: `1px solid ${message.type === 'success' ? '#c3e6cb' : '#f5c6cb'}`
         }}>
           {message.text}
         </div>
       )}
 
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ background: '#f8f9fa', borderBottom: '2px solid #dee2e6' }}>
-            <th style={{ padding: '1rem', textAlign: 'left' }}>Asignatura</th>
-            <th style={{ padding: '1rem', textAlign: 'left' }}>Grupo</th>
-            <th style={{ padding: '1rem', textAlign: 'center' }}>Nivel</th>
-            <th style={{ padding: '1rem', textAlign: 'center', width: '150px' }}>Acciones</th>
-          </tr>
-        </thead>
-        <tbody>
-          {cursos.length === 0 ? (
-            <tr>
-              <td colSpan="4" style={{ padding: '2rem', textAlign: 'center', color: '#999' }}>
-                No hay cursos creados. Crea grupos y asignaturas primero.
-              </td>
+      {cursos.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '3rem', color: '#666' }}>
+          <p style={{ fontSize: '3rem', margin: '0 0 1rem 0' }}>🔗</p>
+          <p style={{ fontSize: '1.2rem', margin: 0 }}>No hay cursos registrados</p>
+        </div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: '#f8f9fa' }}>
+              <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '2px solid #dee2e6' }}>Grupo</th>
+              <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '2px solid #dee2e6' }}>Asignatura</th>
+              <th style={{ padding: '1rem', textAlign: 'center', borderBottom: '2px solid #dee2e6' }}>Acciones</th>
             </tr>
-          ) : (
-            cursos.map((curso) => (
+          </thead>
+          <tbody>
+            {cursos.map(curso => (
               <tr key={curso.id} style={{ borderBottom: '1px solid #dee2e6' }}>
-                <td style={{ padding: '1rem', fontWeight: '600' }}>
-                  {curso.asignaturas.nombre}
-                </td>
-                <td style={{ padding: '1rem' }}>
-                  {curso.grupos.grado}° {curso.grupos.seccion}
-                </td>
-                <td style={{ padding: '1rem', textAlign: 'center' }}>
-                  <span style={{
-                    padding: '0.25rem 0.75rem',
-                    borderRadius: '20px',
-                    fontSize: '0.85rem',
-                    background: curso.grupos.nivel === 'Primario' ? '#e3f2fd' : '#f3e5f5',
-                    color: curso.grupos.nivel === 'Primario' ? '#1976d2' : '#7b1fa2'
-                  }}>
-                    {curso.grupos.nivel}
-                  </span>
-                </td>
+                <td style={{ padding: '1rem' }}>{curso.grupo?.nombre}</td>
+                <td style={{ padding: '1rem' }}>{curso.asignatura?.nombre}</td>
                 <td style={{ padding: '1rem', textAlign: 'center' }}>
                   <button
-                    onClick={() => handleDelete(curso)}
+                    onClick={() => handleEdit(curso)}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      background: '#ffc107',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      marginRight: '0.5rem',
+                      fontWeight: '600'
+                    }}
+                  >
+                    ✏️ Editar
+                  </button>
+                  <button
+                    onClick={() => handleDelete(curso.id)}
                     style={{
                       padding: '0.5rem 1rem',
                       background: '#dc3545',
                       color: 'white',
                       border: 'none',
-                      borderRadius: '5px',
-                      cursor: 'pointer'
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontWeight: '600'
                     }}
                   >
-                    🗑️
+                    🗑️ Eliminar
                   </button>
                 </td>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+            ))}
+          </tbody>
+        </table>
+      )}
 
       {showModal && (
-        <Modal onClose={() => setShowModal(false)}>
-          <h2 style={{ marginBottom: '1.5rem' }}>➕ Nuevo Curso</h2>
-          <form onSubmit={handleSubmit}>
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
-                Grupo *
-              </label>
-              <select
-                value={formData.grupo_id}
-                onChange={(e) => setFormData({ ...formData, grupo_id: e.target.value })}
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            background: 'white',
+            padding: '2rem',
+            borderRadius: '10px',
+            maxWidth: '600px',
+            width: '90%',
+            maxHeight: '80vh',
+            overflow: 'auto'
+          }}>
+            <h2 style={{ marginTop: 0, color: '#667eea' }}>
+              {editingCurso ? '✏️ Editar Curso' : '➕ Crear Cursos Múltiples'}
+            </h2>
+
+            {error && (
+              <div style={{
+                padding: '1rem',
+                background: '#f8d7da',
+                color: '#721c24',
+                borderRadius: '6px',
+                marginBottom: '1rem',
+                border: '1px solid #f5c6cb'
+              }}>
+                {error}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                  Grupo *
+                </label>
+                <select
+                  value={formData.grupo_id}
+                  onChange={(e) => setFormData(prev => ({ ...prev, grupo_id: e.target.value }))}
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    border: '2px solid #e1e8ed',
+                    borderRadius: '8px',
+                    fontSize: '1rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="">Selecciona un grupo</option>
+                  {grupos.map(grupo => (
+  <option key={grupo.id} value={grupo.id}>
+    {`${grupo.nivel} ${grupo.grado}${grupo.seccion}`}
+  </option>
+))}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <label style={{ fontWeight: '600' }}>
+                    Asignaturas * ({formData.asignatura_ids.length} seleccionadas)
+                  </label>
+                  {!editingCurso && (
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        type="button"
+                        onClick={seleccionarTodas}
+                        style={{
+                          padding: '0.25rem 0.75rem',
+                          background: '#28a745',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '0.85rem',
+                          fontWeight: '600'
+                        }}
+                      >
+                        ✅ Todas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={deseleccionarTodas}
+                        style={{
+                          padding: '0.25rem 0.75rem',
+                          background: '#6c757d',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '0.85rem',
+                          fontWeight: '600'
+                        }}
+                      >
+                        ❌ Ninguna
+                      </button>
+                    </div>
+                  )}
+                </div>
+                
+                <div style={{
                   border: '2px solid #e1e8ed',
                   borderRadius: '8px',
-                  fontSize: '1rem'
-                }}
-              >
-                <option value="">Seleccione un grupo</option>
-                {grupos.map((grupo) => (
-                  <option key={grupo.id} value={grupo.id}>
-                    {grupo.grado}° {grupo.seccion} ({grupo.nivel})
-                  </option>
-                ))}
-              </select>
-            </div>
+                  maxHeight: '300px',
+                  overflow: 'auto',
+                  padding: '0.5rem'
+                }}>
+                  {asignaturas.map(asignatura => (
+                    <label
+                      key={asignatura.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '0.75rem',
+                        margin: '0.25rem 0',
+                        background: formData.asignatura_ids.includes(asignatura.id) ? '#e7f3ff' : 'white',
+                        border: `2px solid ${formData.asignatura_ids.includes(asignatura.id) ? '#667eea' : '#e1e8ed'}`,
+                        borderRadius: '6px',
+                        cursor: editingCurso ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={formData.asignatura_ids.includes(asignatura.id)}
+                        onChange={() => handleAsignaturaToggle(asignatura.id)}
+                        disabled={editingCurso}
+                        style={{
+                          marginRight: '0.75rem',
+                          width: '18px',
+                          height: '18px',
+                          cursor: editingCurso ? 'not-allowed' : 'pointer'
+                        }}
+                      />
+                      <span style={{ fontWeight: '500' }}>{asignatura.nombre}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
 
-            <div style={{ marginBottom: '1.5rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
-                Asignatura *
-              </label>
-              <select
-                value={formData.asignatura_id}
-                onChange={(e) => setFormData({ ...formData, asignatura_id: e.target.value })}
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
-                  border: '2px solid #e1e8ed',
-                  borderRadius: '8px',
-                  fontSize: '1rem'
-                }}
-              >
-                <option value="">Seleccione una asignatura</option>
-                {asignaturas.map((asignatura) => (
-                  <option key={asignatura.id} value={asignatura.id}>
-                    {asignatura.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', gap: '1rem' }}>
-              <button
-                type="button"
-                onClick={() => setShowModal(false)}
-                style={{
-                  flex: 1,
-                  padding: '0.75rem',
-                  background: '#6c757d',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer'
-                }}
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                disabled={loading}
-                style={{
-                  flex: 1,
-                  padding: '0.75rem',
-                  background: loading ? '#999' : '#667eea',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: loading ? 'not-allowed' : 'pointer'
-                }}
-              >
-                {loading ? 'Guardando...' : 'Guardar'}
-              </button>
-            </div>
-          </form>
-        </Modal>
+              <div style={{ display: 'flex', gap: '1rem', borderTop: '2px solid #f0f0f0', paddingTop: '1rem' }}>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  style={{
+                    flex: 1,
+                    padding: '0.75rem',
+                    background: saving ? '#999' : '#667eea',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: saving ? 'not-allowed' : 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  {saving 
+                    ? '💾 Guardando...' 
+                    : editingCurso 
+                      ? '💾 Actualizar' 
+                      : `💾 Crear ${formData.asignatura_ids.length} Curso(s)`
+                  }
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowModal(false); resetForm(); }}
+                  disabled={saving}
+                  style={{
+                    flex: 1,
+                    padding: '0.75rem',
+                    background: 'white',
+                    color: '#666',
+                    border: '2px solid #ddd',
+                    borderRadius: '8px',
+                    cursor: saving ? 'not-allowed' : 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  ❌ Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );
 }
-
 // ============================================
 // TAB 4: ESTUDIANTES
 // ============================================
