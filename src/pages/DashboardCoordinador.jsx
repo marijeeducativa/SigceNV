@@ -482,7 +482,7 @@ function PeriodProgressCard({ periodo, data }) {
       </div>
 
       {/* Competency Scores */}
-      {competencias && (
+      {competencias && Object.values(competencias).some(v => v > 0) && (
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(60px, 1fr))',
@@ -493,28 +493,30 @@ function PeriodProgressCard({ periodo, data }) {
           borderRadius: '8px'
         }}>
           {Object.entries(competencias).map(([comp, value]) => (
-            <div key={comp} style={{
-              textAlign: 'center',
-              padding: '0.25rem',
-              background: 'white',
-              borderRadius: '4px',
-              border: '1px solid #dee2e6'
-            }}>
-              <div style={{
-                fontSize: '0.7rem',
-                color: '#666',
-                fontWeight: '600'
+            value > 0 && (
+              <div key={comp} style={{
+                textAlign: 'center',
+                padding: '0.25rem',
+                background: 'white',
+                borderRadius: '4px',
+                border: '1px solid #dee2e6'
               }}>
-                {comp}
+                <div style={{
+                  fontSize: '0.7rem',
+                  color: '#666',
+                  fontWeight: '600'
+                }}>
+                  {comp}
+                </div>
+                <div style={{
+                  fontSize: '0.9rem',
+                  fontWeight: '700',
+                  color: '#495057'
+                }}>
+                  {value.toFixed(1)}
+                </div>
               </div>
-              <div style={{
-                fontSize: '0.9rem',
-                fontWeight: '700',
-                color: '#495057'
-              }}>
-                {value.toFixed(1)}
-              </div>
-            </div>
+            )
           ))}
         </div>
       )}

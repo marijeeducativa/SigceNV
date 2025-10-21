@@ -275,6 +275,31 @@ function Calificaciones() {
     return total.toFixed(2);
   };
 
+  const calcularCompetenciasUnidad = (estudianteId, unidadId) => {
+    const competencias = { C1: 0, C2: 0, C3: 0, C4: 0 };
+    const criteriosUnidad = criterios.filter(c => c.unidad_id === unidadId);
+
+    Object.keys(competencias).forEach(comp => {
+      const criteriosComp = criteriosUnidad.filter(c => c.competencia_grupo === comp);
+      let totalComp = 0, contadorComp = 0;
+
+      criteriosComp.forEach(criterio => {
+        const key = `${estudianteId}-${unidadId}-${criterio.id}`;
+        const cal = calificaciones[key];
+        if (cal?.calificacion != null) {
+          totalComp += parseFloat(cal.calificacion);
+          contadorComp++;
+        }
+      });
+
+      if (contadorComp > 0) {
+        competencias[comp] = tipoCalculo === 'promedio' ? (totalComp / contadorComp) : totalComp;
+      }
+    });
+
+    return competencias;
+  };
+
   const abrirModalCalificaciones = (estudiante, unidad) => {
     setSelectedEstudianteUnidad({ estudiante, unidad });
     setShowCalificacionesModal(true);
@@ -562,10 +587,12 @@ function Calificaciones() {
             </div>
           </div>
         ),
-        size: isTablet ? 80 : 100,
+        size: isTablet ? 120 : 140,
         cell: (info) => {
           const estudiante = info.row.original;
           const total = calcularTotal(estudiante.id, unidad.id);
+          const competenciasUnidad = calcularCompetenciasUnidad(estudiante.id, unidad.id);
+
           return (
             <div
               onClick={() => abrirModalCalificaciones(estudiante, unidad)}
@@ -577,9 +604,10 @@ function Calificaciones() {
                 border: '2px solid #dee2e6',
                 borderRadius: '6px',
                 fontWeight: 'bold',
-                fontSize: isTablet ? '0.9rem' : '1rem',
-                minHeight: '35px',
+                fontSize: isTablet ? '0.8rem' : '0.9rem',
+                minHeight: '50px',
                 display: 'flex',
+                flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
                 transition: 'all 0.2s'
@@ -587,7 +615,22 @@ function Calificaciones() {
               onMouseEnter={(e) => e.target.style.background = '#e9ecef'}
               onMouseLeave={(e) => e.target.style.background = '#f8f9fa'}
             >
-              {total}
+              <div style={{ marginBottom: '0.25rem' }}>{total}</div>
+              <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                {Object.entries(competenciasUnidad).map(([comp, value]) => (
+                  value > 0 && (
+                    <span key={comp} style={{
+                      fontSize: '0.7rem',
+                      background: '#e3f2fd',
+                      padding: '0.1rem 0.2rem',
+                      borderRadius: '2px',
+                      fontWeight: 'normal'
+                    }}>
+                      {comp}: {value.toFixed(1)}
+                    </span>
+                  )
+                ))}
+              </div>
             </div>
           );
         },
@@ -904,6 +947,7 @@ function Calificaciones() {
                     onChange={(e) => handleCalificacionChange(selectedEstudianteUnidad.estudiante.id, selectedEstudianteUnidad.unidad.id, criterio.id, e.target.value)}
                     style={{ width: '100%', padding: '0.75rem', border: '2px solid #e1e8ed', borderRadius: '8px', fontSize: '1rem' }}
                     placeholder="Ingrese calificación"
+                    readOnly={false}
                   />
                 </div>
               );
