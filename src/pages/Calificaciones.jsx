@@ -259,7 +259,6 @@ function Calificaciones() {
         const { data, error } = await supabase.from('calificaciones').insert({
           curso_id: selectedCurso,
           estudiante_id: estudianteId,
-          unidad_id: unidadId,
           criterio_id: criterioId,
           valor: valorNumerico,
           periodo: selectedPeriodo
