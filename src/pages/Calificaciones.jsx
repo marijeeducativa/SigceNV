@@ -250,10 +250,13 @@ function Calificaciones() {
     const valorNumerico = valor === '' ? null : parseFloat(valor);
     try {
       if (calificaciones[key]?.id) {
-        await supabase.from('calificaciones').update({ valor: valorNumerico, updated_at: new Date().toISOString() }).eq('id', calificaciones[key].id);
+        await supabase.from('calificaciones').update({
+          valor: valorNumerico,
+          updated_at: new Date().toISOString()
+        }).eq('id', calificaciones[key].id);
         setCalificaciones(prev => ({ ...prev, [key]: { ...prev[key], valor: valorNumerico } }));
       } else {
-        const { data } = await supabase.from('calificaciones').insert({
+        const { data, error } = await supabase.from('calificaciones').insert({
           curso_id: selectedCurso,
           estudiante_id: estudianteId,
           unidad_id: unidadId,
@@ -261,6 +264,12 @@ function Calificaciones() {
           valor: valorNumerico,
           periodo: selectedPeriodo
         }).select().single();
+
+        if (error) {
+          console.error('Insert error:', error);
+          return;
+        }
+
         setCalificaciones(prev => ({ ...prev, [key]: data }));
       }
     } catch (error) {
