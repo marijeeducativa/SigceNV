@@ -159,13 +159,13 @@ function DashboardCoordinador() {
               };
             }
 
-            // Calculate completion for each unit in this course
+            // Calculate competency scores for each unit in this course
             const unidadesConProgreso = await Promise.all(
               unidadesCurso.map(async (unidad) => {
                 const criteriosCount = unidad.criterios?.length || 0;
 
                 if (criteriosCount === 0) {
-                  return { ...unidad, completionPercentage: 0 };
+                  return { ...unidad, completionPercentage: 0, competencias: { C1: 0, C2: 0, C3: 0, C4: 0 } };
                 }
 
                 // Get students for this course
@@ -177,7 +177,7 @@ function DashboardCoordinador() {
 
                 if (cursoError || !curso) {
                   console.warn(`No course found for unit ${unidad.id}`);
-                  return { ...unidad, completionPercentage: 0 };
+                  return { ...unidad, completionPercentage: 0, competencias: { C1: 0, C2: 0, C3: 0, C4: 0 } };
                 }
 
                 const { data: estudiantes, error: estudiantesError } = await supabase
@@ -187,10 +187,11 @@ function DashboardCoordinador() {
 
                 if (estudiantesError || !estudiantes || estudiantes.length === 0) {
                   console.warn(`No students found for course ${cursoId}`);
-                  return { ...unidad, completionPercentage: 0 };
+                  return { ...unidad, completionPercentage: 0, competencias: { C1: 0, C2: 0, C3: 0, C4: 0 } };
                 }
 
-                // Calculate completion for this unit
+                // Calculate competency scores for this unit
+                const competencias = { C1: 0, C2: 0, C3: 0, C4: 0 };
                 let totalGrades = 0;
                 let completedGrades = 0;
 
@@ -199,44 +200,86 @@ function DashboardCoordinador() {
                     totalGrades++;
                     const { data: calificacion, error: calError } = await supabase
                       .from('calificaciones')
-                      .select('id')
+                      .select('valor')
                       .eq('estudiante_id', estudiante.id)
                       .eq('unidad_id', unidad.id)
                       .eq('criterio_id', criterio.id)
-                      .not('calificacion', 'is', null)
+                      .not('valor', 'is', null)
                       .single();
 
-                    if (!calError && calificacion) completedGrades++;
+                    if (!calError && calificacion) {
+                      completedGrades++;
+                      const comp = criterio.competencia_grupo;
+                      if (comp && competencias.hasOwnProperty(comp)) {
+                        competencias[comp] += calificacion.valor;
+                      }
+                    }
                   }
+                }
+
+                // Calculate average for each competency
+                const numEstudiantes = estudiantes.length;
+                if (numEstudiantes > 0) {
+                  Object.keys(competencias).forEach(comp => {
+                    competencias[comp] = competencias[comp] / numEstudiantes;
+                  });
                 }
 
                 const completionPercentage = totalGrades > 0 ? Math.round((completedGrades / totalGrades) * 100) : 0;
 
-                return { ...unidad, completionPercentage };
+                return { ...unidad, completionPercentage, competencias };
               })
             );
 
-            // Calculate course-level completion
+            // Calculate course-level completion and competency averages
             const totalCompletion = unidadesConProgreso.reduce((sum, u) => sum + u.completionPercentage, 0);
             const avgCompletion = unidadesConProgreso.length > 0 ? Math.round(totalCompletion / unidadesConProgreso.length) : 0;
+
+            // Calculate period competency averages
+            const competenciasPeriodo = { C1: 0, C2: 0, C3: 0, C4: 0 };
+            if (unidadesConProgreso.length > 0) {
+              unidadesConProgreso.forEach(unidad => {
+                Object.keys(competenciasPeriodo).forEach(comp => {
+                  competenciasPeriodo[comp] += unidad.competencias[comp] || 0;
+                });
+              });
+              Object.keys(competenciasPeriodo).forEach(comp => {
+                competenciasPeriodo[comp] = competenciasPeriodo[comp] / unidadesConProgreso.length;
+              });
+            }
 
             return {
               curso: cursoData.curso,
               unidades: unidadesConProgreso,
               avgCompletion,
-              totalUnidades: unidadesConProgreso.length
+              totalUnidades: unidadesConProgreso.length,
+              competencias: competenciasPeriodo
             };
           })
         );
 
-        // Calculate overall period completion
+        // Calculate overall period completion and competency averages
         const totalPeriodCompletion = cursosConProgreso.reduce((sum, c) => sum + c.avgCompletion, 0);
         const avgPeriodCompletion = cursosConProgreso.length > 0 ? Math.round(totalPeriodCompletion / cursosConProgreso.length) : 0;
+
+        // Calculate overall period competency averages
+        const competenciasTotales = { C1: 0, C2: 0, C3: 0, C4: 0 };
+        if (cursosConProgreso.length > 0) {
+          cursosConProgreso.forEach(curso => {
+            Object.keys(competenciasTotales).forEach(comp => {
+              competenciasTotales[comp] += curso.competencias[comp] || 0;
+            });
+          });
+          Object.keys(competenciasTotales).forEach(comp => {
+            competenciasTotales[comp] = competenciasTotales[comp] / cursosConProgreso.length;
+          });
+        }
 
         periodosData[periodo] = {
           cursos: cursosConProgreso,
           avgCompletion: avgPeriodCompletion,
-          totalUnidades: unidadesPeriodo.length
+          totalUnidades: unidadesPeriodo.length,
+          competencias: competenciasTotales
         };
       }
 
@@ -347,7 +390,7 @@ function DashboardCoordinador() {
             <PeriodProgressCard
               key={periodo}
               periodo={periodo}
-              data={unitsProgress[periodo] || { cursos: [], avgCompletion: 0, totalUnidades: 0 }}
+              data={unitsProgress[periodo] || { cursos: [], avgCompletion: 0, totalUnidades: 0, competencias: { C1: 0, C2: 0, C3: 0, C4: 0 } }}
             />
           ))}
         </div>
@@ -388,7 +431,7 @@ function DashboardCoordinador() {
 
 // Componente para mostrar el progreso de unidades por período
 function PeriodProgressCard({ periodo, data }) {
-  const { cursos, avgCompletion, totalUnidades } = data;
+  const { cursos, avgCompletion, totalUnidades, competencias } = data;
 
   const getProgressColor = (percentage) => {
     if (percentage >= 80) return '#28a745';
@@ -437,6 +480,44 @@ function PeriodProgressCard({ periodo, data }) {
           {avgCompletion}% Completado
         </div>
       </div>
+
+      {/* Competency Scores */}
+      {competencias && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(60px, 1fr))',
+          gap: '0.5rem',
+          marginBottom: '1rem',
+          padding: '0.75rem',
+          background: '#f8f9fa',
+          borderRadius: '8px'
+        }}>
+          {Object.entries(competencias).map(([comp, value]) => (
+            <div key={comp} style={{
+              textAlign: 'center',
+              padding: '0.25rem',
+              background: 'white',
+              borderRadius: '4px',
+              border: '1px solid #dee2e6'
+            }}>
+              <div style={{
+                fontSize: '0.7rem',
+                color: '#666',
+                fontWeight: '600'
+              }}>
+                {comp}
+              </div>
+              <div style={{
+                fontSize: '0.9rem',
+                fontWeight: '700',
+                color: '#495057'
+              }}>
+                {value.toFixed(1)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{
         width: '100%',
