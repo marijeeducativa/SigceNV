@@ -253,7 +253,14 @@ function Calificaciones() {
         await supabase.from('calificaciones').update({ valor: valorNumerico, updated_at: new Date().toISOString() }).eq('id', calificaciones[key].id);
         setCalificaciones(prev => ({ ...prev, [key]: { ...prev[key], valor: valorNumerico } }));
       } else {
-        const { data } = await supabase.from('calificaciones').insert({ curso_id: selectedCurso, estudiante_id: estudianteId, unidad_id: unidadId, criterio_id: criterioId, valor: valorNumerico }).select().single();
+        const { data } = await supabase.from('calificaciones').insert({
+          curso_id: selectedCurso,
+          estudiante_id: estudianteId,
+          unidad_id: unidadId,
+          criterio_id: criterioId,
+          valor: valorNumerico,
+          periodo: selectedPeriodo
+        }).select().single();
         setCalificaciones(prev => ({ ...prev, [key]: data }));
       }
     } catch (error) {
