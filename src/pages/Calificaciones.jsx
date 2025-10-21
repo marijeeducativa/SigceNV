@@ -250,10 +250,10 @@ function Calificaciones() {
     const valorNumerico = valor === '' ? null : parseFloat(valor);
     try {
       if (calificaciones[key]?.id) {
-        await supabase.from('calificaciones').update({ calificacion: valorNumerico, updated_at: new Date().toISOString() }).eq('id', calificaciones[key].id);
-        setCalificaciones(prev => ({ ...prev, [key]: { ...prev[key], calificacion: valorNumerico } }));
+        await supabase.from('calificaciones').update({ valor: valorNumerico, updated_at: new Date().toISOString() }).eq('id', calificaciones[key].id);
+        setCalificaciones(prev => ({ ...prev, [key]: { ...prev[key], valor: valorNumerico } }));
       } else {
-        const { data } = await supabase.from('calificaciones').insert({ curso_id: selectedCurso, estudiante_id: estudianteId, unidad_id: unidadId, criterio_id: criterioId, calificacion: valorNumerico }).select().single();
+        const { data } = await supabase.from('calificaciones').insert({ curso_id: selectedCurso, estudiante_id: estudianteId, unidad_id: unidadId, criterio_id: criterioId, valor: valorNumerico }).select().single();
         setCalificaciones(prev => ({ ...prev, [key]: data }));
       }
     } catch (error) {
@@ -266,8 +266,8 @@ function Calificaciones() {
     criterios.forEach(criterio => {
       const key = `${estudianteId}-${unidadId}-${criterio.id}`;
       const cal = calificaciones[key];
-      if (cal?.calificacion != null) {
-        total += parseFloat(cal.calificacion);
+      if (cal?.valor != null) {
+        total += parseFloat(cal.valor);
         contador++;
       }
     });
@@ -286,8 +286,8 @@ function Calificaciones() {
       criteriosComp.forEach(criterio => {
         const key = `${estudianteId}-${unidadId}-${criterio.id}`;
         const cal = calificaciones[key];
-        if (cal?.calificacion != null) {
-          totalComp += parseFloat(cal.calificacion);
+        if (cal?.valor != null) {
+          totalComp += parseFloat(cal.valor);
           contadorComp++;
         }
       });
@@ -926,7 +926,7 @@ function Calificaciones() {
 
           <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
             {criterios.filter(c => c.unidad_id === selectedEstudianteUnidad.unidad.id).map(criterio => {
-              const valor = calificaciones[`${selectedEstudianteUnidad.estudiante.id}-${selectedEstudianteUnidad.unidad.id}-${criterio.id}`]?.calificacion ?? '';
+              const valor = calificaciones[`${selectedEstudianteUnidad.estudiante.id}-${selectedEstudianteUnidad.unidad.id}-${criterio.id}`]?.valor ?? '';
               return (
                 <div key={criterio.id} style={{ marginBottom: '1rem', padding: '1rem', border: '1px solid #dee2e6', borderRadius: '8px', background: '#f8f9fa' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
