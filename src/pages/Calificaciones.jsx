@@ -46,6 +46,9 @@ function Calificaciones() {
   const [isTablet, setIsTablet] = useState(window.innerWidth < 1024);
   const [showGestionUnidadModal, setShowGestionUnidadModal] = useState(false);
   const [unidadGestion, setUnidadGestion] = useState(null);
+  const [isPrimary, setIsPrimary] = useState(true);
+  const [competenciasList, setCompetenciasList] = useState(['C1','C2','C3']);
+  const [recuperaciones, setRecuperaciones] = useState({});
 
   const periodos = ['1', '2', '3'];
 
@@ -156,6 +159,8 @@ function Calificaciones() {
         .eq('grupo_id', curso?.grupo_id)
         .order('num_orden', { ascending: true });
 
+      const { data: gruposData } = await supabase.from('grupos').select('*');
+
       const { data: calificacionesData } = await supabase
         .from('calificaciones')
         .select('*')
@@ -163,7 +168,9 @@ function Calificaciones() {
 
       const calificacionesMap = {};
       (calificacionesData || []).forEach(cal => {
-        const key = `${cal.estudiante_id}-${cal.unidad_id}-${cal.criterio_id}`;
+        const criterioObj = criteriosData.find(c => c.id === cal.criterio_id);
+        const unidadIdFromCriterio = criterioObj?.unidad_id;
+        const key = `${cal.estudiante_id}-${unidadIdFromCriterio}-${cal.criterio_id}`;
         calificacionesMap[key] = cal;
       });
 
@@ -171,6 +178,23 @@ function Calificaciones() {
       setCriterios(criteriosData || []);
       setEstudiantes(estudiantesData || []);
       setCalificaciones(calificacionesMap);
+
+      const grupo = gruposData?.find(g => g.id === curso?.grupo_id);
+      const primary = grupo?.nivel === 'Primario';
+      setIsPrimary(primary);
+      setCompetenciasList(primary ? ['C1','C2','C3'] : ['C1','C2','C3','C4']);
+
+      const { data: recuperacionesData } = await supabase
+        .from('recuperaciones_competencias')
+        .select('*')
+        .eq('curso_id', selectedCurso);
+
+      const recuperacionesMap = {};
+      (recuperacionesData || []).forEach(rec => {
+        const key = `${rec.estudiante_id}-${rec.periodo}-${rec.competencia_grupo}-${rec.tipo}`;
+        recuperacionesMap[key] = rec.calificacion;
+      });
+      setRecuperaciones(recuperacionesMap);
     } catch (error) {
       setMessage({ type: 'error', text: 'Error: ' + error.message });
     } finally {
@@ -184,10 +208,10 @@ function Calificaciones() {
       return;
     }
     try {
-      await supabase.from('unidades').insert({ 
-        curso_id: selectedCurso, 
+      await supabase.from('unidades').insert({
+        curso_id: selectedCurso,
         nombre: nuevaUnidad.nombre,
-        periodo: nuevaUnidad.periodo 
+        periodo: nuevaUnidad.periodo
       });
       setMessage({ type: 'success', text: 'Unidad agregada' });
       setShowAgregarUnidadModal(false);
@@ -251,17 +275,17 @@ function Calificaciones() {
     try {
       if (calificaciones[key]?.id) {
         await supabase.from('calificaciones').update({
-          valor: valorNumerico,
+          calificacion: valorNumerico,
           updated_at: new Date().toISOString()
         }).eq('id', calificaciones[key].id);
-        setCalificaciones(prev => ({ ...prev, [key]: { ...prev[key], valor: valorNumerico } }));
+        setCalificaciones(prev => ({ ...prev, [key]: { ...prev[key], calificacion: valorNumerico } }));
       } else {
         const { data, error } = await supabase.from('calificaciones').insert({
           curso_id: selectedCurso,
           estudiante_id: estudianteId,
           criterio_id: criterioId,
-          valor: valorNumerico,
-          periodo: selectedPeriodo
+          calificacion: valorNumerico,
+          periodo: 'P' + selectedPeriodo
         }).select().single();
 
         if (error) {
@@ -276,13 +300,65 @@ function Calificaciones() {
     }
   };
 
+  const handleRecoveryChange = async (estudianteId, periodo, competencia, tipo, valor) => {
+    const key = `${estudianteId}-${periodo}-${competencia}-${tipo}`;
+    const valorNumerico = valor === '' ? null : parseFloat(valor);
+
+    try {
+      if (recuperaciones[key]?.id) {
+        // Update existing recovery
+        await supabase.from('recuperaciones_competencias').update({
+          calificacion: valorNumerico,
+          updated_at: new Date().toISOString()
+        }).eq('id', recuperaciones[key].id);
+
+        setRecuperaciones(prev => ({
+          ...prev,
+          [key]: { ...prev[key], calificacion: valorNumerico }
+        }));
+      } else if (valorNumerico !== null) {
+        // Insert new recovery
+        const { data, error } = await supabase.from('recuperaciones_competencias').insert({
+          curso_id: selectedCurso,
+          estudiante_id: estudianteId,
+          periodo: parseInt(periodo),
+          competencia_grupo: competencia,
+          tipo: tipo,
+          calificacion: valorNumerico
+        }).select().single();
+
+        if (error) {
+          console.error('Recovery insert error:', error);
+          return;
+        }
+
+        setRecuperaciones(prev => ({
+          ...prev,
+          [key]: data
+        }));
+      } else {
+        // Delete recovery if value is cleared
+        if (recuperaciones[key]?.id) {
+          await supabase.from('recuperaciones_competencias').delete().eq('id', recuperaciones[key].id);
+          setRecuperaciones(prev => {
+            const newRecuperaciones = { ...prev };
+            delete newRecuperaciones[key];
+            return newRecuperaciones;
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Recovery error:', error);
+    }
+  };
+
   const calcularTotal = (estudianteId, unidadId) => {
     let total = 0, contador = 0;
     criterios.forEach(criterio => {
       const key = `${estudianteId}-${unidadId}-${criterio.id}`;
       const cal = calificaciones[key];
-      if (cal?.valor != null) {
-        total += parseFloat(cal.valor);
+      if (cal?.calificacion != null) {
+        total += parseFloat(cal.calificacion);
         contador++;
       }
     });
@@ -291,18 +367,19 @@ function Calificaciones() {
   };
 
   const calcularCompetenciasUnidad = (estudianteId, unidadId) => {
-    const competencias = { C1: 0, C2: 0, C3: 0, C4: 0 };
+    const competencias = {};
+    competenciasList.forEach(comp => competencias[comp] = 0);
     const criteriosUnidad = criterios.filter(c => c.unidad_id === unidadId);
 
-    Object.keys(competencias).forEach(comp => {
+    competenciasList.forEach(comp => {
       const criteriosComp = criteriosUnidad.filter(c => c.competencia_grupo === comp);
       let totalComp = 0, contadorComp = 0;
 
       criteriosComp.forEach(criterio => {
         const key = `${estudianteId}-${unidadId}-${criterio.id}`;
         const cal = calificaciones[key];
-        if (cal?.valor != null) {
-          totalComp += parseFloat(cal.valor);
+        if (cal?.calificacion != null) {
+          totalComp += parseFloat(cal.calificacion);
           contadorComp++;
         }
       });
@@ -313,6 +390,44 @@ function Calificaciones() {
     });
 
     return competencias;
+  };
+
+  const calcularCompetenciasPeriodo = (estudianteId, periodo) => {
+    const unidadesPeriodo = unidades.filter(u => u.periodo == periodo);
+    const competencias = {};
+    competenciasList.forEach(comp => competencias[comp] = []);
+    unidadesPeriodo.forEach(unidad => {
+      const compUnidad = calcularCompetenciasUnidad(estudianteId, unidad.id);
+      competenciasList.forEach(comp => {
+        if (compUnidad[comp] > 0) competencias[comp].push(compUnidad[comp]);
+      });
+    });
+    const promedios = {};
+    competenciasList.forEach(comp => {
+      const vals = competencias[comp];
+      promedios[comp] = vals.length > 0 ? vals.reduce((a,b)=>a+b,0) / vals.length : 0;
+    });
+    return promedios;
+  };
+
+  const calcularCompetenciaFinal = (estudianteId, comp) => {
+    let sum = 0, count = 0;
+    for(let p=1; p<=4; p++){
+      const periodoComp = calcularCompetenciasPeriodo(estudianteId, p)[comp];
+      const recoveryKey = `${estudianteId}-${p}-${comp}-periodo`;
+      const recovery = recuperaciones[recoveryKey];
+      const value = recovery !== undefined ? recovery : periodoComp;
+      if (value > 0) {
+        sum += value;
+        count++;
+      }
+    }
+    return count > 0 ? sum / count : 0;
+  };
+
+  const calcularCalificacionFinal = (estudianteId) => {
+    const compFinals = competenciasList.map(comp => calcularCompetenciaFinal(estudianteId, comp)).filter(v => v > 0);
+    return compFinals.length > 0 ? compFinals.reduce((a,b)=>a+b,0) / compFinals.length : 0;
   };
 
   const abrirModalCalificaciones = (estudiante, unidad) => {
@@ -633,17 +748,15 @@ function Calificaciones() {
               <div style={{ marginBottom: '0.25rem' }}>{total}</div>
               <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', justifyContent: 'center' }}>
                 {Object.entries(competenciasUnidad).map(([comp, value]) => (
-                  value > 0 && (
-                    <span key={comp} style={{
-                      fontSize: '0.7rem',
-                      background: '#e3f2fd',
-                      padding: '0.1rem 0.2rem',
-                      borderRadius: '2px',
-                      fontWeight: 'normal'
-                    }}>
-                      {comp}: {value.toFixed(1)}
-                    </span>
-                  )
+                  <span key={comp} style={{
+                    fontSize: '0.7rem',
+                    background: '#e3f2fd',
+                    padding: '0.1rem 0.2rem',
+                    borderRadius: '2px',
+                    fontWeight: 'normal'
+                  }}>
+                    {comp}: {value.toFixed(1)}
+                  </span>
                 ))}
               </div>
             </div>
@@ -653,7 +766,7 @@ function Calificaciones() {
     });
 
     return cols;
-  }, [unidades, criterios, calificaciones, tipoCalculo]);
+  }, [unidades, criterios, calificaciones, tipoCalculo, competenciasList]);
 
   const data = useMemo(() => {
     return estudiantes.map(est => ({
@@ -736,6 +849,105 @@ function Calificaciones() {
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
                   ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+
+      {/* Sección de Recuperaciones */}
+      {selectedCurso && estudiantes.length > 0 && (
+        <div style={{ marginTop: '2rem', border: '1px solid #ffc107', borderRadius: '8px', padding: '1rem' }}>
+          <h3 style={{ color: '#856404', marginBottom: '1rem' }}>🔄 Recuperaciones de Competencias</h3>
+          <p style={{ marginBottom: '1rem', fontSize: '0.9rem', color: '#666' }}>
+            Ingresa las notas de recuperación para reemplazar los valores originales de las competencias en los cálculos finales.
+          </p>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>📅 Período de Recuperación</label>
+            <select value={selectedPeriodo} onChange={(e) => setSelectedPeriodo(e.target.value)} style={{ padding: '0.75rem', border: '2px solid #ffc107', borderRadius: '8px', background: '#fff3cd' }}>
+              {periodos.map(p => (<option key={p} value={p}>Período {p}</option>))}
+            </select>
+          </div>
+
+          <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid #dee2e6', borderRadius: '8px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+              <thead style={{ background: '#fff3cd', position: 'sticky', top: 0, zIndex: 10 }}>
+                <tr>
+                  <th style={{ padding: '0.75rem', border: '1px solid #dee2e6', textAlign: 'left', minWidth: '200px' }}>Estudiante</th>
+                  {competenciasList.map(comp => (
+                    <th key={comp} style={{ padding: '0.75rem', border: '1px solid #dee2e6', textAlign: 'center', minWidth: '100px' }}>
+                      {comp} Recuperación
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.map(estudiante => (
+                  <tr key={estudiante.id} style={{ background: estudiante.num_orden % 2 === 0 ? '#f8f9fa' : 'white' }}>
+                    <td style={{ padding: '0.75rem', border: '1px solid #dee2e6', fontWeight: '600' }}>
+                      {estudiante.estudiante}
+                    </td>
+                    {competenciasList.map(comp => {
+                      const recoveryKey = `${estudiante.id}-${selectedPeriodo}-${comp}-periodo`;
+                      const currentValue = recuperaciones[recoveryKey] || '';
+                      return (
+                        <td key={comp} style={{ padding: '0.75rem', border: '1px solid #dee2e6', textAlign: 'center' }}>
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.01"
+                            value={currentValue}
+                            onChange={(e) => handleRecoveryChange(estudiante.id, selectedPeriodo, comp, 'periodo', e.target.value)}
+                            placeholder="Nota RC"
+                            style={{
+                              width: '80px',
+                              padding: '0.25rem',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              textAlign: 'center',
+                              fontSize: '0.8rem'
+                            }}
+                          />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {selectedCurso && estudiantes.length > 0 && (
+        <div style={{ marginTop: '2rem', border: '1px solid #dee2e6', borderRadius: '8px', padding: '1rem' }}>
+          <h3 style={{ color: '#667eea', marginBottom: '1rem' }}>Resumen de Calificaciones Finales (Año)</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#f8f9fa' }}>
+                <th style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'left' }}>Estudiante</th>
+                {competenciasList.map(comp => (
+                  <th key={comp} style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center' }}>{comp} Final</th>
+                ))}
+                <th style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center', fontWeight: 'bold', background: '#e9ecef' }}>Nota Final Asignatura</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map(estudiante => (
+                <tr key={estudiante.id}>
+                  <td style={{ padding: '0.5rem', border: '1px solid #dee2e6' }}>{estudiante.estudiante}</td>
+                  {competenciasList.map(comp => (
+                    <td key={comp} style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center' }}>
+                      {calcularCompetenciaFinal(estudiante.id, comp).toFixed(1)}
+                    </td>
+                  ))}
+                  <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center', fontWeight: 'bold', background: '#f0f4ff' }}>
+                    {calcularCalificacionFinal(estudiante.id).toFixed(1)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -941,7 +1153,7 @@ function Calificaciones() {
 
           <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
             {criterios.filter(c => c.unidad_id === selectedEstudianteUnidad.unidad.id).map(criterio => {
-              const valor = calificaciones[`${selectedEstudianteUnidad.estudiante.id}-${selectedEstudianteUnidad.unidad.id}-${criterio.id}`]?.valor ?? '';
+              const valor = calificaciones[`${selectedEstudianteUnidad.estudiante.id}-${selectedEstudianteUnidad.unidad.id}-${criterio.id}`]?.calificacion || '';
               return (
                 <div key={criterio.id} style={{ marginBottom: '1rem', padding: '1rem', border: '1px solid #dee2e6', borderRadius: '8px', background: '#f8f9fa' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
