@@ -12,9 +12,8 @@ const cockroachUrl = import.meta.env.VITE_COCKROACHDB_URL || 'postgresql://marij
 export const cockroachClient = {
   query: async (sql, params = []) => {
     try {
-      // For now, we'll create a simple API endpoint to handle database queries
-      // This is a temporary solution - ideally you'd have a backend API
-      const response = await fetch('/api/query', {
+      // Updated to use Railway backend URL
+      const response = await fetch('https://sigcenv-backend-production.up.railway.app/api/query', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
