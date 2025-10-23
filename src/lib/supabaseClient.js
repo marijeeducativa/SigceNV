@@ -12,8 +12,9 @@ const cockroachUrl = import.meta.env.VITE_COCKROACHDB_URL || 'postgresql://marij
 export const cockroachClient = {
   query: async (sql, params = []) => {
     try {
-      // Updated to use Railway backend URL
-      const response = await fetch('https://sigcenv-backend-production.up.railway.app/api/query', {
+      // Updated to use Render backend URL
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://sigcenv-backend.onrender.com/api/query';
+      const response = await fetch(backendUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
