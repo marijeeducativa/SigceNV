@@ -123,6 +123,11 @@ function Login() {
           </button>
         </form>
 
+        <div style={{ marginTop: '1.5rem', textAlign: 'center', fontSize: '0.85rem', color: '#666' }}>
+          <p><strong>Usuario de prueba:</strong></p>
+          <p>Email: admin@test.com</p>
+          <p>Contraseña: admin123456</p>
+        </div>
       </div>
     </div>
   );

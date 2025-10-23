@@ -85,7 +85,7 @@ function Usuarios() {
 
         // 1. Crear usuario en auth
         console.log('1️⃣ Llamando a signUp...');
-        const { data: authData, error: authError } = await apiClient.register({
+        const { data: authData, error: authError } = await supabase.auth.signUp({
           email: formData.email,
           password: formData.password,
           options: {

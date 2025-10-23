@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { supabase, cockroachClient } from '../lib/supabaseClient';
+import { supabase } from '../lib/supabaseClient';
 
 const AuthContext = createContext({});
 
@@ -17,7 +17,7 @@ useEffect(() => {
     try {
       console.log('🔑 Iniciando sesión...');
       const { data: { session }, error } = await supabase.auth.getSession();
-
+      
       console.log('📊 Sesión obtenida:', { session: !!session, error });
 
       if (!mounted) return;
@@ -46,7 +46,7 @@ useEffect(() => {
       if (!mounted) return;
 
       console.log('🔄 Auth state change:', event);
-
+      
       if (event === 'SIGNED_IN' && session?.user) {
         setUser(session.user);
         await loadProfile(session.user.id);
@@ -57,9 +57,6 @@ useEffect(() => {
       } else if (event === 'TOKEN_REFRESHED' && session?.user) {
         setUser(session.user);
         // NO recargar perfil, solo actualizar token
-      } else if (event === 'INITIAL_SESSION' && session?.user) {
-        // Evitar loop infinito en INITIAL_SESSION
-        console.log('📋 Sesión inicial ya manejada');
       }
     }
   );
@@ -70,6 +67,21 @@ useEffect(() => {
   };
 }, []);
 
+  const checkSession = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session?.user) {
+        setUser(session.user);
+        await loadProfile(session.user.id);
+      } else {
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error('Error checking session:', error);
+      setLoading(false);
+    }
+  };
 
  const loadProfile = async (userId) => {
   if (!userId) {
@@ -81,21 +93,36 @@ useEffect(() => {
   try {
     console.log('🔍 Cargando perfil para userId:', userId);
 
-    // Use CockroachDB instead of Supabase for profile loading
-    const query = 'SELECT * FROM usuarios WHERE id = $1';
-    const result = await cockroachClient.query(query, [userId]);
+    const queryPromise = supabase
+      .from('usuarios')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
 
-    console.log('📊 Resultado CockroachDB:', result.rows);
+    const timeoutPromise = new Promise((resolve) => {
+      setTimeout(() => resolve({ data: null, error: new Error('Timeout: La consulta para cargar el perfil tardó demasiado.') }), 30000);
+    });
 
-    if (result.rows.length > 0) {
-      console.log('✅ Perfil cargado:', result.rows[0]);
-      setUserProfile(result.rows[0]);
+    const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+
+    console.log('📊 Resultado:', { data, error });
+
+    if (error) {
+      console.error('❌ Error en loadProfile:', error.message);
+      setUserProfile(null);
+      // Aquí podrías establecer un estado de error para mostrar en la UI si quieres
+      return;
+    }
+
+    if (data) {
+      console.log('✅ Perfil cargado:', data);
+      setUserProfile(data);
     } else {
       console.warn('⚠️ No se encontró perfil');
       setUserProfile(null);
     }
   } catch (error) {
-    console.error('❌ Error en loadProfile:', error.message);
+    console.error('❌ Catch error en loadProfile:', error.message);
     setUserProfile(null);
   } finally {
     console.log('🏁 Finalizando loadProfile - setLoading(false)');

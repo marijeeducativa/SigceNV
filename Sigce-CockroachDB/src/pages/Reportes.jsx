@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import React from 'react';
-import { supabase, cockroachClient } from '../lib/supabaseClient';
+import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../contexts/AuthContext';
 
 function Reportes() {
@@ -24,10 +24,8 @@ function Reportes() {
   const [tipoCalculo, setTipoCalculo] = useState('promedio');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
-  const [recuperaciones, setRecuperaciones] = useState({});
-  const [competencias, setCompetencias] = useState(['C1', 'C2', 'C3', 'C4']);
 
-  const periodos = ['1er Período', '2do Período', '3er Período', 'Anual'];
+  const periodos = ['1er Trimestre', '2do Trimestre', '3er Trimestre', 'Anual'];
 
   // Cargar configuración y cursos al montar
   useEffect(() => {
@@ -88,13 +86,11 @@ function Reportes() {
       const curso = cursos.find(c => c.id === selectedCurso);
       if (!curso) return;
 
-      // Use CockroachDB for students
-      const estudiantesQuery = 'SELECT * FROM estudiantes WHERE grupo_id = $1 ORDER BY num_orden';
-      const estudiantesResult = await cockroachClient.query(estudiantesQuery, [curso.grupo_id]);
-      setEstudiantes(estudiantesResult.rows || []);
+      const { data, error } = await supabase.from('estudiantes').select('*').eq('grupo_id', curso.grupo_id).order('num_orden');
+      if (error) throw error;
+      setEstudiantes(data || []);
     } catch (error) {
       console.error('Error:', error);
-      setEstudiantes([]);
     }
   };
 
@@ -155,15 +151,16 @@ function Reportes() {
       // 1. Obtener datos del curso
       const curso = cursos.find(c => c.id === selectedCurso);
 
-      // 2. Obtener estudiantes del curso using CockroachDB
-      const estudiantesQuery = 'SELECT * FROM estudiantes WHERE grupo_id = $1 ORDER BY num_orden';
-      const estudiantesResult = await cockroachClient.query(estudiantesQuery, [curso.grupo_id]);
-      const estudiantesCurso = estudiantesResult.rows;
+      // 2. Obtener estudiantes del curso
+      const { data: estudiantesCurso } = await supabase
+        .from('estudiantes')
+        .select('*')
+        .eq('grupo_id', curso.grupo_id)
+        .order('num_orden');
 
       // 3. Determinar si es primaria o secundaria
       const isPrimary = curso.grupos.nivel === 'Primario';
       const competencias = isPrimary ? ['C1', 'C2', 'C3'] : ['C1', 'C2', 'C3', 'C4'];
-      console.log('Competencias:', competencias);
 
       // 4. Obtener calificaciones de recuperación
       const { data: recuperaciones } = await supabase
@@ -265,10 +262,12 @@ function Reportes() {
         .eq('unidad_id', selectedUnidad)
         .order('orden');
 
-      // 3. Obtener estudiantes del curso using CockroachDB
-      const estudiantesQuery = 'SELECT * FROM estudiantes WHERE grupo_id = $1 ORDER BY num_orden';
-      const estudiantesResult = await cockroachClient.query(estudiantesQuery, [curso.grupo_id]);
-      const estudiantesCurso = estudiantesResult.rows;
+      // 3. Obtener estudiantes del curso
+      const { data: estudiantesCurso } = await supabase
+        .from('estudiantes')
+        .select('*')
+        .eq('grupo_id', curso.grupo_id)
+        .order('num_orden');
 
       // 4. Obtener calificaciones de todos los estudiantes para esta unidad
       const { data: calificaciones } = await supabase
@@ -334,7 +333,7 @@ function Reportes() {
             .select('*')
             .eq('estudiante_id', selectedEstudiante);
           if (selectedPeriodo !== 'Anual') {
-            const periodoMap = { '1er Período': 'P1', '2do Período': 'P2', '3er Período': 'P3' };
+            const periodoMap = { '1er Trimestre': 'P1', '2do Trimestre': 'P2', '3er Trimestre': 'P3' };
             queryCalificaciones = queryCalificaciones.eq('periodo', periodoMap[selectedPeriodo]);
           } else {
             // Para "Anual", incluir todos los períodos
@@ -612,7 +611,7 @@ function Reportes() {
               <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>🎓 Estudiante</label>
               <select value={selectedEstudiante} onChange={(e) => { setSelectedEstudiante(e.target.value); setReporteData(null); }} disabled={!selectedCurso} style={{ width: '100%', padding: '0.75rem', border: '2px solid #e1e8ed', borderRadius: '8px', fontSize: '1rem' }}>
                 <option value="">Seleccione...</option>
-                {estudiantes.map(est => <option key={est.id} value={est.id}>{est.num_orden}. {est.nombre_completo}</option>)}
+                {estudiantes.map(est => <option key={est.id} value={est.id}>{est.num_orden}. {est.nombres} {est.apellidos}</option>)}
               </select>
             </div>
 
@@ -766,7 +765,7 @@ function Reportes() {
                 return (
                   <tr key={estudiante.id} style={{ background: estudiante.num_orden % 2 === 0 ? '#f8f9fa' : 'white' }}>
                     <td style={{ padding: '0.75rem', border: '1px solid #dee2e6', fontWeight: '600' }}>
-                      {estudiante.num_orden}. {estudiante.nombre_completo}
+                      {estudiante.num_orden}. {estudiante.nombres} {estudiante.apellidos}
                     </td>
                     {reporteUnidadData.criterios.map(criterio => {
                       const cal = calificacionesEstudiante.find(c => c.criterio_id === criterio.id);
@@ -854,7 +853,7 @@ function Reportes() {
               {reporteOficialData.estudiantes.map(estudiante => (
                 <tr key={estudiante.id} style={{ background: estudiante.num_orden % 2 === 0 ? '#f8f9fa' : 'white' }}>
                   <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '0.7rem' }}>
-                    {estudiante.num_orden}. {estudiante.nombre_completo}
+                    {estudiante.num_orden}. {estudiante.nombres} {estudiante.apellidos}
                   </td>
 
                   {/* Período 1 con recuperaciones */}
@@ -951,7 +950,7 @@ function Reportes() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
               <div>
                 <strong style={{ color: '#667eea' }}>Estudiante:</strong>
-                <p style={{ margin: '0.25rem 0 0 0' }}>{reporteData.estudiante.nombre_completo}</p>
+                <p style={{ margin: '0.25rem 0 0 0' }}>{reporteData.estudiante.nombres} {reporteData.estudiante.apellidos}</p>
               </div>
               <div>
                 <strong style={{ color: '#667eea' }}>Curso:</strong>
@@ -979,7 +978,7 @@ function Reportes() {
             </h3>
             <div style={{ border: '1px solid #dee2e6', borderTop: 'none', padding: '1rem' }}>
               {['P1', 'P2', 'P3'].map(periodo => {
-                const periodoNombre = periodo === 'P1' ? '1er Período' : periodo === 'P2' ? '2do Período' : '3er Período';
+                const periodoNombre = periodo === 'P1' ? '1er Trimestre' : periodo === 'P2' ? '2do Trimestre' : '3er Trimestre';
                 const competenciasPeriodo = calcularCompetenciasPeriodo(reporteData.estudiante.id, periodo.replace('P', ''));
 
                 return (
@@ -988,7 +987,7 @@ function Reportes() {
                       {periodoNombre}
                     </h4>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                      {['C1', 'C2', 'C3', 'C4'].map(comp => {
+                      {competencias.map(comp => {
                         const valorOriginal = competenciasPeriodo[comp] || 0;
                         const recoveryKey = `${reporteData.estudiante.id}-${periodo.replace('P', '')}-${comp}-periodo`;
                         const valorRecuperacion = recuperaciones[recoveryKey];

@@ -7,6 +7,13 @@ export default defineConfig({
   server: {
     hmr: {
       overlay: false  // Deshabilitar el overlay de errores
-    }
+    },
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   }
 })

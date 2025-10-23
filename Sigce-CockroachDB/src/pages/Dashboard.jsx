@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, cockroachClient } from '../lib/supabaseClient';
+import { supabase } from '../lib/supabaseClient';
 import { Link } from 'react-router-dom';
 
 function Dashboard() {
@@ -18,7 +18,7 @@ function Dashboard() {
     if (userProfile) {
       loadStats();
     }
-  }, [userProfile]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userProfile]);
 
   const loadStats = async () => {
     try {
@@ -26,49 +26,46 @@ function Dashboard() {
 
       // Load basic stats based on role
       if (userProfile?.rol === 'Administrador') {
-        try {
-          const profesoresQuery = 'SELECT COUNT(*) as count FROM usuarios WHERE rol = $1';
-          const profesoresResult = await cockroachClient.query(profesoresQuery, ['Profesor']);
+        const { data: profesores } = await supabase
+          .from('usuarios')
+          .select('id')
+          .eq('rol', 'Profesor');
 
-          const cursosQuery = 'SELECT COUNT(*) as count FROM cursos';
-          const cursosResult = await cockroachClient.query(cursosQuery);
+        const { data: cursos } = await supabase
+          .from('cursos')
+          .select('id');
 
-          const estudiantesQuery = 'SELECT COUNT(*) as count FROM estudiantes';
-          const estudiantesResult = await cockroachClient.query(estudiantesQuery);
+        const { data: estudiantes } = await supabase
+          .from('estudiantes')
+          .select('id');
 
-          const gruposQuery = 'SELECT COUNT(*) as count FROM grupos';
-          const gruposResult = await cockroachClient.query(gruposQuery);
+        const { data: grupos } = await supabase
+          .from('grupos')
+          .select('id');
 
-          setStats({
-            totalProfesores: profesoresResult.rows && profesoresResult.rows[0] ? parseInt(profesoresResult.rows[0].count) || 0 : 0,
-            totalCursos: cursosResult.rows && cursosResult.rows[0] ? parseInt(cursosResult.rows[0].count) || 0 : 0,
-            totalEstudiantes: estudiantesResult.rows && estudiantesResult.rows[0] ? parseInt(estudiantesResult.rows[0].count) || 0 : 0,
-            totalGrupos: gruposResult.rows && gruposResult.rows[0] ? parseInt(gruposResult.rows[0].count) || 0 : 0
-          });
-        } catch (error) {
-          console.error('Error loading admin stats:', error);
-          setStats({
-            totalProfesores: 0,
-            totalCursos: 0,
-            totalEstudiantes: 0,
-            totalGrupos: 0
-          });
-        }
+        setStats({
+          totalProfesores: profesores?.length || 0,
+          totalCursos: cursos?.length || 0,
+          totalEstudiantes: estudiantes?.length || 0,
+          totalGrupos: grupos?.length || 0
+        });
       } else {
-// For teachers and coordinators, only load relevant stats
-const cursosQuery = 'SELECT COUNT(*) as count FROM cursos';
-const cursosResult = await cockroachClient.query(cursosQuery);
+        // For teachers and coordinators, only load relevant stats
+        const { data: cursos } = await supabase
+          .from('cursos')
+          .select('id');
 
-const estudiantesQuery = 'SELECT COUNT(*) as count FROM estudiantes';
-const estudiantesResult = await cockroachClient.query(estudiantesQuery);
+        const { data: estudiantes } = await supabase
+          .from('estudiantes')
+          .select('id');
 
-setStats({
-totalProfesores: 0, // Not shown for non-admins
-totalCursos: cursosResult.rows && cursosResult.rows[0] ? parseInt(cursosResult.rows[0].count) || 0 : 0,
-totalEstudiantes: estudiantesResult.rows && estudiantesResult.rows[0] ? parseInt(estudiantesResult.rows[0].count) || 0 : 0,
-totalGrupos: 0 // Not shown for non-admins
-});
-}
+        setStats({
+          totalProfesores: 0, // Not shown for non-admins
+          totalCursos: cursos?.length || 0,
+          totalEstudiantes: estudiantes?.length || 0,
+          totalGrupos: 0 // Not shown for non-admins
+        });
+      }
 
       // Load units progress for all roles
       await loadUnitsProgress();
@@ -81,21 +78,165 @@ totalGrupos: 0 // Not shown for non-admins
   };
 
   const loadUnitsProgress = async () => {
-     try {
-       // Use a simplified approach - just show empty progress for now to avoid the loop
-       setUnitsProgress({
-         '1': { cursos: [], avgCompletion: 0, totalUnidades: 0 },
-         '2': { cursos: [], avgCompletion: 0, totalUnidades: 0 },
-         '3': { cursos: [], avgCompletion: 0, totalUnidades: 0 }
-       });
-     } catch (error) {
-       console.error('Error loading units progress:', error);
-       setUnitsProgress({
-         '1': { cursos: [], avgCompletion: 0, totalUnidades: 0 },
-         '2': { cursos: [], avgCompletion: 0, totalUnidades: 0 },
-         '3': { cursos: [], avgCompletion: 0, totalUnidades: 0 }
-       });
-     }
+    try {
+      // Get all units grouped by period with course information
+      const { data: unidades, error: unidadesError } = await supabase
+        .from('unidades')
+        .select(`
+          id,
+          nombre,
+          periodo,
+          curso_id,
+          cursos (
+            id,
+            asignaturas (
+              nombre
+            ),
+            grupos (
+              nivel,
+              grado,
+              seccion
+            )
+          ),
+          criterios (
+            id,
+            unidad_id
+          )
+        `)
+        .order('periodo', { ascending: true })
+        .order('nombre', { ascending: true });
+
+      if (unidadesError) {
+        console.error('Error fetching unidades:', unidadesError);
+        return;
+      }
+
+      if (!unidades || unidades.length === 0) {
+        setUnitsProgress({});
+        return;
+      }
+
+      // Group by period and calculate completion
+      const periodosData = {};
+      const periodos = ['1', '2', '3'];
+
+      for (const periodo of periodos) {
+        const unidadesPeriodo = unidades.filter(u => u.periodo === periodo);
+
+        if (unidadesPeriodo.length > 0) {
+          // Group units by course
+          const cursosMap = new Map();
+
+          // First pass: group units by course
+          for (const unidad of unidadesPeriodo) {
+            const cursoKey = unidad.curso_id;
+            if (!cursosMap.has(cursoKey)) {
+              cursosMap.set(cursoKey, {
+                curso: unidad.cursos,
+                unidades: []
+              });
+            }
+            cursosMap.get(cursoKey).unidades.push(unidad);
+          }
+
+          // Second pass: calculate completion for each course's units
+          const cursosConProgreso = await Promise.all(
+            Array.from(cursosMap.entries()).map(async ([cursoId, cursoData]) => {
+              const unidadesCurso = cursoData.unidades;
+
+              // Calculate completion for each unit in this course
+              const unidadesConProgreso = await Promise.all(
+                unidadesCurso.map(async (unidad) => {
+                  const criteriosCount = unidad.criterios?.length || 0;
+
+                  if (criteriosCount === 0) {
+                    return { ...unidad, completionPercentage: 0 };
+                  }
+
+                  // Get students for this course
+                  const { data: curso, error: cursoError } = await supabase
+                    .from('cursos')
+                    .select('grupo_id')
+                    .eq('id', cursoId)
+                    .single();
+
+                  if (cursoError || !curso) {
+                    console.warn(`No course found for unit ${unidad.id}`);
+                    return { ...unidad, completionPercentage: 0 };
+                  }
+
+                  const { data: estudiantes, error: estudiantesError } = await supabase
+                    .from('estudiantes')
+                    .select('id')
+                    .eq('grupo_id', curso.grupo_id);
+
+                  if (estudiantesError || !estudiantes || estudiantes.length === 0) {
+                    console.warn(`No students found for course ${cursoId}`);
+                    return { ...unidad, completionPercentage: 0 };
+                  }
+
+                  // Calculate completion for this unit
+                  let totalGrades = 0;
+                  let completedGrades = 0;
+
+                  for (const estudiante of estudiantes) {
+                    for (const criterio of unidad.criterios) {
+                      totalGrades++;
+                      const { data: calificacion, error: calError } = await supabase
+                        .from('calificaciones')
+                        .select('id')
+                        .eq('estudiante_id', estudiante.id)
+                        .eq('unidad_id', unidad.id)
+                        .eq('criterio_id', criterio.id)
+                        .not('calificacion', 'is', null)
+                        .single();
+
+                      if (!calError && calificacion) completedGrades++;
+                    }
+                  }
+
+                  const completionPercentage = totalGrades > 0 ? Math.round((completedGrades / totalGrades) * 100) : 0;
+
+                  return { ...unidad, completionPercentage };
+                })
+              );
+
+              // Calculate course-level completion
+              const totalCompletion = unidadesConProgreso.reduce((sum, u) => sum + u.completionPercentage, 0);
+              const avgCompletion = unidadesConProgreso.length > 0 ? Math.round(totalCompletion / unidadesConProgreso.length) : 0;
+
+              return {
+                curso: cursoData.curso,
+                unidades: unidadesConProgreso,
+                avgCompletion,
+                totalUnidades: unidadesConProgreso.length
+              };
+            })
+          );
+
+          // Calculate overall period completion
+          const totalPeriodCompletion = cursosConProgreso.reduce((sum, c) => sum + c.avgCompletion, 0);
+          const avgPeriodCompletion = cursosConProgreso.length > 0 ? Math.round(totalPeriodCompletion / cursosConProgreso.length) : 0;
+
+          periodosData[periodo] = {
+            cursos: cursosConProgreso,
+            avgCompletion: avgPeriodCompletion,
+            totalUnidades: unidadesPeriodo.length
+          };
+        } else {
+          periodosData[periodo] = {
+            cursos: [],
+            avgCompletion: 0,
+            totalUnidades: 0
+          };
+        }
+      }
+
+      setUnitsProgress(periodosData);
+    } catch (error) {
+      console.error('Error loading units progress:', error);
+      setUnitsProgress({});
+    }
   };
 
   if (authLoading || loading) {
