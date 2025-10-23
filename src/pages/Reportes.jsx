@@ -177,7 +177,23 @@ function Reportes() {
         recuperacionesMap[key] = rec.calificacion;
       });
 
-      // 5. Calcular promedios por período para cada estudiante
+      // 5. Obtener todas las calificaciones del curso para cálculos eficientes
+      const { data: allCalificaciones } = await supabase
+        .from('calificaciones')
+        .select('*, criterios(unidad_id, competencia_grupo, periodo)')
+        .eq('curso_id', selectedCurso);
+
+      // Crear mapa de calificaciones por estudiante, unidad y criterio
+      const calificacionesMap = {};
+      (allCalificaciones || []).forEach(cal => {
+        const key = `${cal.estudiante_id}-${cal.criterios.unidad_id}-${cal.criterio_id}`;
+        if (!calificacionesMap[key]) {
+          calificacionesMap[key] = [];
+        }
+        calificacionesMap[key].push(cal);
+      });
+
+      // 6. Calcular promedios por período para cada estudiante
       const estudiantesConDatos = estudiantesCurso.map(estudiante => {
         const periodosData = {};
 
@@ -187,12 +203,11 @@ function Reportes() {
 
           competencias.forEach(comp => {
             // Calcular promedio de la competencia en este período
-            const compValue = calcularCompetenciasPeriodo(estudiante.id, periodo)[comp] || 0;
+            const compValue = calcularCompetenciasPeriodoOficial(estudiante.id, periodo, comp, calificacionesMap, unidades, criterios);
             competenciasPeriodo[comp] = compValue;
           });
 
           periodosData[periodoKey] = competenciasPeriodo;
-
         }
 
         // Calcular finales con recuperaciones
@@ -397,12 +412,24 @@ function Reportes() {
       const { default: html2canvas } = await import('html2canvas');
       const { default: jsPDF } = await import('jspdf');
 
+      // Temporarily adjust styles for PDF generation
+      const originalStyle = element.style.cssText;
+      element.style.width = '100%';
+      element.style.maxWidth = 'none';
+      element.style.transform = 'scale(0.8)';
+      element.style.transformOrigin = 'top left';
+
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: 3,
         useCORS: true,
         allowTaint: true,
-        backgroundColor: '#ffffff'
+        backgroundColor: '#ffffff',
+        width: element.scrollWidth,
+        height: element.scrollHeight
       });
+
+      // Restore original styles
+      element.style.cssText = originalStyle;
 
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('l', 'mm', 'letter');
@@ -527,6 +554,34 @@ function Reportes() {
       promedios[comp] = vals.length > 0 ? vals.reduce((a,b)=>a+b,0) / vals.length : 0;
     });
     return promedios;
+  };
+
+  const calcularCompetenciasPeriodoOficial = (estudianteId, periodo, competencia, calificacionesMap, unidades, criterios) => {
+    const unidadesPeriodo = unidades.filter(u => u.periodo == periodo);
+    const valoresCompetencia = [];
+
+    unidadesPeriodo.forEach(unidad => {
+      const criteriosCompetencia = criterios.filter(c => c.unidad_id === unidad.id && c.competencia_grupo === competencia);
+      let totalCompetencia = 0;
+      let countCompetencia = 0;
+
+      criteriosCompetencia.forEach(criterio => {
+        const key = `${estudianteId}-${unidad.id}-${criterio.id}`;
+        const calificacionesCriterio = calificacionesMap[key] || [];
+        calificacionesCriterio.forEach(cal => {
+          if (cal.calificacion != null) {
+            totalCompetencia += parseFloat(cal.calificacion);
+            countCompetencia++;
+          }
+        });
+      });
+
+      if (countCompetencia > 0) {
+        valoresCompetencia.push(totalCompetencia / countCompetencia);
+      }
+    });
+
+    return valoresCompetencia.length > 0 ? valoresCompetencia.reduce((a,b)=>a+b,0) / valoresCompetencia.length : 0;
   };
 
   const calcularCompetenciasUnidad = (estudianteId, unidadId) => {
@@ -794,58 +849,58 @@ function Reportes() {
 
       {/* Reporte Oficial (se imprime) */}
       {reporteOficialData && (
-        <div className="reporte-oficial print-only" style={{ background: 'white', padding: '0.5rem', width: 'fit-content', margin: '0 auto 2rem', pageBreakInside: 'avoid' }}>
+        <div className="reporte-oficial print-only" style={{ background: 'white', padding: '0.2rem', width: 'fit-content', margin: '0 auto 1rem', pageBreakInside: 'avoid', maxWidth: '100%', overflow: 'hidden' }}>
           {/* Header del reporte oficial */}
-          <div style={{ textAlign: 'center', marginBottom: '0.5rem', paddingBottom: '0.5rem', borderBottom: '2px solid #17a2b8' }}>
-            <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#17a2b8', marginBottom: '0.25rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: '0.3rem', paddingBottom: '0.3rem', borderBottom: '2px solid #17a2b8' }}>
+            <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#17a2b8', marginBottom: '0.15rem' }}>
               REPORTE OFICIAL DE EVALUACIÓN
             </div>
-            <div style={{ fontSize: '14px', color: '#333' }}>
+            <div style={{ fontSize: '10px', color: '#333' }}>
               {reporteOficialData.curso.asignaturas.nombre} - {reporteOficialData.curso.grupos.grado}° {reporteOficialData.curso.grupos.seccion}
             </div>
           </div>
 
           {/* Tabla del reporte oficial */}
-          <table style={{ width: '100%', borderCollapse: 'collapse', border: '2px solid #17a2b8', fontSize: '0.75rem' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', border: '2px solid #17a2b8', fontSize: '0.65rem', tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ background: '#17a2b8', color: 'white' }}>
-                <th style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'left', minWidth: '180px' }}>Estudiante</th>
+                <th style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'left', width: '140px', fontSize: '0.6rem' }}>Estudiante</th>
                 {reporteOficialData.competencias.map(comp => (
                   <React.Fragment key={comp}>
-                    <th style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'center', minWidth: '60px' }}>
+                    <th style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'center', width: '45px', fontSize: '0.55rem' }}>
                       {comp} P1
                     </th>
-                    <th style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'center', minWidth: '60px', background: '#ffc107', color: '#333' }}>
+                    <th style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'center', width: '45px', background: '#ffc107', color: '#333', fontSize: '0.55rem' }}>
                       RC{comp} P1
                     </th>
                   </React.Fragment>
                 ))}
                 {reporteOficialData.competencias.map(comp => (
                   <React.Fragment key={`${comp}-p2`}>
-                    <th style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'center', minWidth: '60px' }}>
+                    <th style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'center', width: '45px', fontSize: '0.55rem' }}>
                       {comp} P2
                     </th>
-                    <th style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'center', minWidth: '60px', background: '#ffc107', color: '#333' }}>
+                    <th style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'center', width: '45px', background: '#ffc107', color: '#333', fontSize: '0.55rem' }}>
                       RC{comp} P2
                     </th>
                   </React.Fragment>
                 ))}
                 {reporteOficialData.competencias.map(comp => (
                   <React.Fragment key={`${comp}-p3`}>
-                    <th style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'center', minWidth: '60px' }}>
+                    <th style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'center', width: '45px', fontSize: '0.55rem' }}>
                       {comp} P3
                     </th>
-                    <th style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'center', minWidth: '60px', background: '#ffc107', color: '#333' }}>
+                    <th style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'center', width: '45px', background: '#ffc107', color: '#333', fontSize: '0.55rem' }}>
                       RC{comp} P3
                     </th>
                   </React.Fragment>
                 ))}
                 {reporteOficialData.competencias.map(comp => (
-                  <th key={`${comp}-final`} style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'center', minWidth: '60px', background: '#0066cc' }}>
+                  <th key={`${comp}-final`} style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'center', width: '50px', background: '#0066cc', fontSize: '0.55rem' }}>
                     {comp} Final
                   </th>
                 ))}
-                <th style={{ padding: '0.5rem', border: '1px solid #fff', textAlign: 'center', minWidth: '70px', background: '#28a745', fontWeight: 'bold' }}>
+                <th style={{ padding: '0.3rem', border: '1px solid #fff', textAlign: 'center', width: '55px', background: '#28a745', fontWeight: 'bold', fontSize: '0.55rem' }}>
                   Nota Final
                 </th>
               </tr>
@@ -853,7 +908,7 @@ function Reportes() {
             <tbody>
               {reporteOficialData.estudiantes.map(estudiante => (
                 <tr key={estudiante.id} style={{ background: estudiante.num_orden % 2 === 0 ? '#f8f9fa' : 'white' }}>
-                  <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '0.7rem' }}>
+                  <td style={{ padding: '0.2rem', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '0.55rem', lineHeight: '1.1' }}>
                     {estudiante.num_orden}. {estudiante.nombre_completo}
                   </td>
 
@@ -863,10 +918,10 @@ function Reportes() {
                     const recoveryValue = estudiante.recuperaciones[recoveryKey];
                     return (
                       <React.Fragment key={`${comp}-p1-group`}>
-                        <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center' }}>
+                        <td style={{ padding: '0.2rem', border: '1px solid #dee2e6', textAlign: 'center', fontSize: '0.5rem' }}>
                           {estudiante.periodos.P1[comp]?.toFixed(1) || '-'}
                         </td>
-                        <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center', background: recoveryValue !== undefined ? '#fff3cd' : 'transparent', fontWeight: recoveryValue !== undefined ? 'bold' : 'normal' }}>
+                        <td style={{ padding: '0.2rem', border: '1px solid #dee2e6', textAlign: 'center', background: recoveryValue !== undefined ? '#fff3cd' : 'transparent', fontWeight: recoveryValue !== undefined ? 'bold' : 'normal', fontSize: '0.5rem' }}>
                           {recoveryValue !== undefined ? recoveryValue.toFixed(1) : '-'}
                         </td>
                       </React.Fragment>
@@ -879,10 +934,10 @@ function Reportes() {
                     const recoveryValue = estudiante.recuperaciones[recoveryKey];
                     return (
                       <React.Fragment key={`${comp}-p2-group`}>
-                        <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center' }}>
+                        <td style={{ padding: '0.2rem', border: '1px solid #dee2e6', textAlign: 'center', fontSize: '0.5rem' }}>
                           {estudiante.periodos.P2[comp]?.toFixed(1) || '-'}
                         </td>
-                        <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center', background: recoveryValue !== undefined ? '#fff3cd' : 'transparent', fontWeight: recoveryValue !== undefined ? 'bold' : 'normal' }}>
+                        <td style={{ padding: '0.2rem', border: '1px solid #dee2e6', textAlign: 'center', background: recoveryValue !== undefined ? '#fff3cd' : 'transparent', fontWeight: recoveryValue !== undefined ? 'bold' : 'normal', fontSize: '0.5rem' }}>
                           {recoveryValue !== undefined ? recoveryValue.toFixed(1) : '-'}
                         </td>
                       </React.Fragment>
@@ -895,10 +950,10 @@ function Reportes() {
                     const recoveryValue = estudiante.recuperaciones[recoveryKey];
                     return (
                       <React.Fragment key={`${comp}-p3-group`}>
-                        <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center' }}>
+                        <td style={{ padding: '0.2rem', border: '1px solid #dee2e6', textAlign: 'center', fontSize: '0.5rem' }}>
                           {estudiante.periodos.P3[comp]?.toFixed(1) || '-'}
                         </td>
-                        <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center', background: recoveryValue !== undefined ? '#fff3cd' : 'transparent', fontWeight: recoveryValue !== undefined ? 'bold' : 'normal' }}>
+                        <td style={{ padding: '0.2rem', border: '1px solid #dee2e6', textAlign: 'center', background: recoveryValue !== undefined ? '#fff3cd' : 'transparent', fontWeight: recoveryValue !== undefined ? 'bold' : 'normal', fontSize: '0.5rem' }}>
                           {recoveryValue !== undefined ? recoveryValue.toFixed(1) : '-'}
                         </td>
                       </React.Fragment>
@@ -907,13 +962,13 @@ function Reportes() {
 
                   {/* Finales */}
                   {reporteOficialData.competencias.map(comp => (
-                    <td key={`${comp}-final`} style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center', fontWeight: 'bold', background: '#e3f2fd' }}>
+                    <td key={`${comp}-final`} style={{ padding: '0.2rem', border: '1px solid #dee2e6', textAlign: 'center', fontWeight: 'bold', background: '#e3f2fd', fontSize: '0.5rem' }}>
                       {estudiante.finales[comp]?.toFixed(1) || '-'}
                     </td>
                   ))}
 
                   {/* Nota Final */}
-                  <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center', fontWeight: 'bold', background: '#d4edda', fontSize: '0.8rem' }}>
+                  <td style={{ padding: '0.2rem', border: '1px solid #dee2e6', textAlign: 'center', fontWeight: 'bold', background: '#d4edda', fontSize: '0.6rem' }}>
                     {estudiante.calificacionFinal?.toFixed(1) || '-'}
                   </td>
                 </tr>
@@ -922,7 +977,7 @@ function Reportes() {
           </table>
 
           {/* Footer del reporte oficial */}
-          <div style={{ marginTop: '0.5rem', textAlign: 'center', color: '#666', fontSize: '8px', borderTop: '1px solid #17a2b8', paddingTop: '0.25rem' }}>
+          <div style={{ marginTop: '0.3rem', textAlign: 'center', color: '#666', fontSize: '6px', borderTop: '1px solid #17a2b8', paddingTop: '0.15rem' }}>
             Generado el {new Date().toLocaleDateString('es-DO')} | Sistema SIGCE - Reporte Oficial
           </div>
         </div>
@@ -1190,11 +1245,17 @@ function Reportes() {
             padding: 3px 2px !important;
           }
           .reporte-oficial th {
-            font-size: 7px !important;
+            font-size: 5px !important;
             font-weight: bold !important;
             background: #f0f0f0 !important;
             color: #000 !important;
-            padding: 3px 2px !important;
+            padding: 2px 1px !important;
+            line-height: 1.1 !important;
+          }
+          .reporte-oficial td {
+            font-size: 4px !important;
+            padding: 1px !important;
+            line-height: 1.1 !important;
           }
           .reporte-unidad td:first-child {
             text-align: left !important;
