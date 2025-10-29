@@ -3,8 +3,8 @@ import { useReactTable, getCoreRowModel, flexRender } from '@tanstack/react-tabl
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../contexts/AuthContext';
 
-const Modal = ({ onClose, children }) => (
-  <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+const Modal = ({ onClose, children, zIndex = 1000 }) => (
+  <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: zIndex }}>
     <div style={{ background: 'white', padding: '2rem', borderRadius: '10px', width: '90%', maxWidth: '600px', maxHeight: '90vh', overflowY: 'auto' }}>
       {children}
     </div>
@@ -33,6 +33,7 @@ function Calificaciones() {
   const [showEditCriterioModal, setShowEditCriterioModal] = useState(false);
   const [showCalificacionesModal, setShowCalificacionesModal] = useState(false);
   const [showCopiarUnidadModal, setShowCopiarUnidadModal] = useState(false);
+  const [showGestionUnidadesModal, setShowGestionUnidadesModal] = useState(false);
   const [selectedEstudianteUnidad, setSelectedEstudianteUnidad] = useState(null);
   const [selectedUnidadCopiar, setSelectedUnidadCopiar] = useState(null);
   const [nuevaUnidad, setNuevaUnidad] = useState({ nombre: '', periodo: '1' });
@@ -96,7 +97,21 @@ function Calificaciones() {
 
   const loadCursos = async () => {
     try {
-      const { data: cursosData } = await supabase.from('cursos').select('*');
+      let query = supabase.from('cursos').select('*');
+
+      // Filter courses for teachers based on assignments
+      if (userProfile?.rol === 'Profesor') {
+        const { data: asignaciones } = await supabase.from('asignaciones').select('curso_id').eq('user_id', userProfile.id);
+        const cursosIds = asignaciones?.map(a => a.curso_id) || [];
+        if (cursosIds.length > 0) {
+          query = query.in('id', cursosIds);
+        } else {
+          setCursos([]);
+          return;
+        }
+      }
+
+      const { data: cursosData } = await query;
       const { data: gruposData } = await supabase.from('grupos').select('*');
       const { data: asignaturasData } = await supabase.from('asignaturas').select('*');
 
@@ -124,13 +139,8 @@ function Calificaciones() {
   };
 
   const loadCompetencias = async () => {
-    try {
-      const { data } = await supabase.from('competencia_config').select('competencia_grupo');
-      const comp = [...new Set((data || []).map(c => c.competencia_grupo).filter(Boolean))];
-      setCompetencias(comp);
-    } catch (error) {
-      console.error('Error:', error);
-    }
+    // Hardcode competencies globally since they should be available for all courses
+    setCompetencias(['C1','C2','C3','C4']);
   };
 
   const loadCursoData = async () => {
@@ -140,14 +150,14 @@ function Calificaciones() {
         .from('unidades')
         .select('*')
         .eq('curso_id', selectedCurso)
-        .eq('periodo', selectedPeriodo)
+        .order('periodo', { ascending: true })
         .order('nombre', { ascending: true });
 
       const { data: criteriosData } = await supabase
         .from('criterios')
         .select('*')
         .eq('curso_id', selectedCurso)
-        .eq('periodo', selectedPeriodo)
+        .order('periodo', { ascending: true })
         .order('competencia_grupo', { ascending: true })
         .order('orden', { ascending: true });
 
@@ -362,8 +372,8 @@ function Calificaciones() {
         contador++;
       }
     });
-    if (tipoCalculo === 'promedio' && contador > 0) return (total / contador).toFixed(2);
-    return total.toFixed(2);
+    if (tipoCalculo === 'promedio' && contador > 0) return Math.round(total / contador);
+    return Math.round(total);
   };
 
   const calcularCompetenciasUnidad = (estudianteId, unidadId) => {
@@ -385,7 +395,7 @@ function Calificaciones() {
       });
 
       if (contadorComp > 0) {
-        competencias[comp] = tipoCalculo === 'promedio' ? (totalComp / contadorComp) : totalComp;
+        competencias[comp] = tipoCalculo === 'promedio' ? Math.round(totalComp / contadorComp) : Math.round(totalComp);
       }
     });
 
@@ -405,7 +415,7 @@ function Calificaciones() {
     const promedios = {};
     competenciasList.forEach(comp => {
       const vals = competencias[comp];
-      promedios[comp] = vals.length > 0 ? vals.reduce((a,b)=>a+b,0) / vals.length : 0;
+      promedios[comp] = vals.length > 0 ? Math.round(vals.reduce((a,b)=>a+b,0) / vals.length) : 0;
     });
     return promedios;
   };
@@ -422,12 +432,12 @@ function Calificaciones() {
         count++;
       }
     }
-    return count > 0 ? sum / count : 0;
+    return count > 0 ? Math.round(sum / count) : 0;
   };
 
   const calcularCalificacionFinal = (estudianteId) => {
     const compFinals = competenciasList.map(comp => calcularCompetenciaFinal(estudianteId, comp)).filter(v => v > 0);
-    return compFinals.length > 0 ? compFinals.reduce((a,b)=>a+b,0) / compFinals.length : 0;
+    return compFinals.length > 0 ? Math.round(compFinals.reduce((a,b)=>a+b,0) / compFinals.length) : 0;
   };
 
   const abrirModalCalificaciones = (estudiante, unidad) => {
@@ -500,6 +510,8 @@ function Calificaciones() {
 
       if (successCount > 0) {
         setMessage({ type: 'success', text: `Unidad copiada a ${successCount} curso(s) exitosamente${errorCount > 0 ? ` (${errorCount} errores)` : ''}` });
+        // Refresh data after copying
+        await loadCursoData();
       } else {
         setMessage({ type: 'error', text: 'Error al copiar unidad' });
       }
@@ -512,9 +524,24 @@ function Calificaciones() {
     }
   };
 
-  const abrirGestionUnidad = (unidad) => {
-    setUnidadGestion(unidad);
-    setShowGestionUnidadModal(true);
+  const abrirGestionUnidad = async (unidad) => {
+    try {
+      // Load criteria for the unit being managed
+      const { data: criteriosData } = await supabase
+        .from('criterios')
+        .select('*')
+        .eq('unidad_id', unidad.id)
+        .order('orden', { ascending: true });
+
+      setUnidadGestion({
+        ...unidad,
+        criterios: criteriosData || []
+      });
+      setShowGestionUnidadModal(true);
+    } catch (error) {
+      console.error('Error loading unit criteria:', error);
+      setMessage({ type: 'error', text: 'Error al cargar criterios de la unidad' });
+    }
   };
 
   const actualizarCriterioInline = async (criterioId, field, value) => {
@@ -755,7 +782,7 @@ function Calificaciones() {
                     borderRadius: '2px',
                     fontWeight: 'normal'
                   }}>
-                    {comp}: {value.toFixed(1)}
+                    {comp}: {Math.round(value)}
                   </span>
                 ))}
               </div>
@@ -823,6 +850,7 @@ function Calificaciones() {
         <div style={{ marginBottom: '1.5rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
           <button onClick={() => setShowAgregarUnidadModal(true)} style={{ padding: '0.75rem 1.5rem', background: '#28a745', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>+ Unidad</button>
           <button onClick={() => setShowAgregarCriterioModal(true)} style={{ padding: '0.75rem 1.5rem', background: '#007bff', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>+ Criterios</button>
+          <button onClick={() => setShowGestionUnidadesModal(true)} style={{ padding: '0.75rem 1.5rem', background: '#6f42c1', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>⚙️ Gestionar Unidades</button>
           <button onClick={() => setShowCopiarUnidadesModal(true)} style={{ padding: '0.75rem 1.5rem', background: '#17a2b8', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>📋 Copiar Unidades</button>
         </div>
       )}
@@ -942,11 +970,11 @@ function Calificaciones() {
                   <td style={{ padding: '0.5rem', border: '1px solid #dee2e6' }}>{estudiante.estudiante}</td>
                   {competenciasList.map(comp => (
                     <td key={comp} style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center' }}>
-                      {calcularCompetenciaFinal(estudiante.id, comp).toFixed(1)}
+                      {Math.round(calcularCompetenciaFinal(estudiante.id, comp))}
                     </td>
                   ))}
                   <td style={{ padding: '0.5rem', border: '1px solid #dee2e6', textAlign: 'center', fontWeight: 'bold', background: '#f0f4ff' }}>
-                    {calcularCalificacionFinal(estudiante.id).toFixed(1)}
+                    {Math.round(calcularCalificacionFinal(estudiante.id))}
                   </td>
                 </tr>
               ))}
@@ -984,7 +1012,7 @@ function Calificaciones() {
         </div>
       </Modal>}
 
-      {showEditUnidadModal && editingUnidad && <Modal onClose={() => setShowEditUnidadModal(false)}>
+      {showEditUnidadModal && editingUnidad && <Modal onClose={() => setShowEditUnidadModal(false)} zIndex={1100}>
         <h2 style={{ marginTop: 0, color: '#667eea' }}>Editar Unidad</h2>
         <input type="text" value={editingUnidad.nombre} onChange={(e) => setEditingUnidad({ ...editingUnidad, nombre: e.target.value })} placeholder="Nombre de la unidad" style={{ width: '100%', padding: '0.75rem', border: '2px solid #e1e8ed', borderRadius: '8px', marginBottom: '1rem' }} />
         <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>Período:</label>
@@ -998,7 +1026,7 @@ function Calificaciones() {
       </Modal>}
 
       {showCopiarUnidadModal && selectedUnidadCopiar && (
-        <Modal onClose={() => setShowCopiarUnidadModal(false)}>
+        <Modal onClose={() => setShowCopiarUnidadModal(false)} zIndex={1100}>
           <h2 style={{ marginTop: 0, color: '#667eea' }}>Copiar Unidad</h2>
           <p style={{ marginBottom: '1rem', color: '#495057' }}>
             Copiar "<strong>{selectedUnidadCopiar.nombre}</strong>" con todos sus criterios
@@ -1036,7 +1064,7 @@ function Calificaciones() {
       )}
 
       {showGestionUnidadModal && unidadGestion && (
-        <Modal onClose={() => setShowGestionUnidadModal(false)}>
+        <Modal onClose={() => setShowGestionUnidadModal(false)} zIndex={1100}>
           <h2 style={{ marginTop: 0, color: '#667eea' }}>Gestionar Unidad: {unidadGestion.nombre}</h2>
 
           <div style={{ marginBottom: '1.5rem' }}>
@@ -1127,7 +1155,7 @@ function Calificaciones() {
         </Modal>
       )}
 
-      {showEditCriterioModal && editingCriterio && <Modal onClose={() => setShowEditCriterioModal(false)}>
+      {showEditCriterioModal && editingCriterio && <Modal onClose={() => setShowEditCriterioModal(false)} zIndex={1100}>
         <h2 style={{ marginTop: 0, color: '#667eea' }}>Editar Criterio</h2>
         <input type="text" value={editingCriterio.nombre} onChange={(e) => setEditingCriterio({ ...editingCriterio, nombre: e.target.value })} placeholder="Nombre" style={{ width: '100%', padding: '0.75rem', border: '2px solid #e1e8ed', borderRadius: '8px', marginBottom: '0.5rem' }} />
         <input type="number" value={editingCriterio.valor_maximo} onChange={(e) => setEditingCriterio({ ...editingCriterio, valor_maximo: e.target.value })} placeholder="Valor máximo" style={{ width: '100%', padding: '0.75rem', border: '2px solid #e1e8ed', borderRadius: '8px', marginBottom: '0.5rem' }} />
@@ -1141,6 +1169,102 @@ function Calificaciones() {
           <button onClick={() => setShowEditCriterioModal(false)} style={{ flex: 1, padding: '0.75rem', background: '#6c757d', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Cancelar</button>
         </div>
       </Modal>}
+
+      {showGestionUnidadesModal && (
+        <Modal onClose={() => setShowGestionUnidadesModal(false)}>
+          <h2 style={{ marginTop: 0, color: '#667eea' }}>Gestionar Unidades del Curso</h2>
+          <p style={{ marginBottom: '1rem', color: '#495057' }}>
+            Administra todas las unidades y sus criterios para este curso
+          </p>
+
+          <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+            {unidades.length === 0 ? (
+              <p style={{ textAlign: 'center', color: '#6c757d', padding: '2rem' }}>No hay unidades en este curso</p>
+            ) : (
+              unidades.map(unidad => {
+                const criteriosUnidad = criterios.filter(c => c.unidad_id === unidad.id);
+                return (
+                  <div key={unidad.id} style={{ marginBottom: '1.5rem', padding: '1rem', border: '2px solid #dee2e6', borderRadius: '8px', background: '#f8f9fa' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h3 style={{ margin: 0, color: '#495057' }}>{unidad.nombre}</h3>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          onClick={() => { setEditingUnidad(unidad); setShowEditUnidadModal(true); }}
+                          style={{ background: '#ffc107', color: 'black', border: 'none', padding: '0.25rem 0.5rem', borderRadius: '3px', cursor: 'pointer', fontSize: '0.8rem' }}
+                          title="Editar unidad"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => abrirGestionUnidad(unidad)}
+                          style={{ background: '#17a2b8', color: 'white', border: 'none', padding: '0.25rem 0.5rem', borderRadius: '3px', cursor: 'pointer', fontSize: '0.8rem' }}
+                          title="Gestionar criterios"
+                        >
+                          ⚙️
+                        </button>
+                        <button
+                          onClick={() => eliminarUnidad(unidad.id)}
+                          style={{ background: '#dc3545', color: 'white', border: 'none', padding: '0.25rem 0.5rem', borderRadius: '3px', cursor: 'pointer', fontSize: '0.8rem' }}
+                          title="Eliminar unidad"
+                        >
+                          🗑️
+                        </button>
+                        <button
+                          onClick={() => { setSelectedUnidadCopiar(unidad); setShowCopiarUnidadModal(true); }}
+                          style={{ background: '#28a745', color: 'white', border: 'none', padding: '0.25rem 0.5rem', borderRadius: '3px', cursor: 'pointer', fontSize: '0.8rem' }}
+                          title="Copiar unidad"
+                        >
+                          📋
+                        </button>
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: '1rem' }}>
+                      <strong>Criterios ({criteriosUnidad.length}):</strong>
+                    </div>
+
+                    {criteriosUnidad.length === 0 ? (
+                      <p style={{ fontStyle: 'italic', color: '#6c757d', margin: '0.5rem 0' }}>Sin criterios asignados</p>
+                    ) : (
+                      <div style={{ display: 'grid', gap: '0.5rem' }}>
+                        {criteriosUnidad.map(criterio => (
+                          <div key={criterio.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem', background: 'white', borderRadius: '4px', border: '1px solid #dee2e6' }}>
+                            <span style={{ flex: 1, fontSize: '0.9rem' }}>{criterio.nombre}</span>
+                            <span style={{ fontSize: '0.8rem', color: '#6c757d' }}>Máx: {criterio.valor_maximo}</span>
+                            {criterio.competencia_grupo && (
+                              <span style={{ fontSize: '0.8rem', background: '#e3f2fd', padding: '0.1rem 0.3rem', borderRadius: '2px' }}>
+                                {criterio.competencia_grupo}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => { setEditingCriterio(criterio); setShowEditCriterioModal(true); }}
+                              style={{ background: '#ffc107', color: 'black', border: 'none', padding: '0.1rem 0.3rem', borderRadius: '2px', cursor: 'pointer', fontSize: '0.7rem' }}
+                              title="Editar criterio"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              onClick={() => eliminarCriterio(criterio.id)}
+                              style={{ background: '#dc3545', color: 'white', border: 'none', padding: '0.1rem 0.3rem', borderRadius: '2px', cursor: 'pointer', fontSize: '0.7rem' }}
+                              title="Eliminar criterio"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+            <button onClick={() => setShowGestionUnidadesModal(false)} style={{ flex: 1, padding: '0.75rem', background: '#6c757d', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Cerrar</button>
+          </div>
+        </Modal>
+      )}
 
       {showCalificacionesModal && selectedEstudianteUnidad && (
         <Modal onClose={() => setShowCalificacionesModal(false)}>
