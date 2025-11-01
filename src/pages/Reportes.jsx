@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import React from 'react';
 import { supabase, cockroachClient } from '../lib/supabaseClient';
 import { useAuth } from '../contexts/AuthContext';
+import * as XLSX from 'xlsx';
 
 function Reportes() {
   const { userProfile } = useAuth();
@@ -245,7 +246,7 @@ function Reportes() {
 
       setReporteOficialData({
         curso,
-        estudiantes: estudiantesConDatos,
+        estudiantes: ordenarEstudiantes(estudiantesConDatos, curso.orden_estudiantes),
         competencias,
         isPrimary
       });
@@ -297,7 +298,7 @@ function Reportes() {
         curso,
         unidad,
         criterios: criterios || [],
-        estudiantes: estudiantesCurso || [],
+        estudiantes: ordenarEstudiantes(estudiantesCurso, curso.orden_estudiantes) || [],
         calificaciones: calificaciones || []
       });
 
@@ -584,6 +585,296 @@ function Reportes() {
     return valoresCompetencia.length > 0 ? valoresCompetencia.reduce((a,b)=>a+b,0) / valoresCompetencia.length : 0;
   };
 
+  const exportToExcelIndividual = () => {
+    if (!reporteData) {
+      alert('No hay reporte individual para exportar');
+      return;
+    }
+
+    try {
+      // Crear workbook
+      const wb = XLSX.utils.book_new();
+
+      // Hoja 1: Información del estudiante
+      const infoData = [
+        ['INFORMACIÓN DEL ESTUDIANTE'],
+        [''],
+        ['Estudiante:', reporteData.estudiante.nombre_completo],
+        ['Curso:', reporteData.curso.asignaturas.nombre],
+        ['Grupo:', `${reporteData.curso.grupos.grado}° ${reporteData.curso.grupos.seccion} (${reporteData.curso.grupos.nivel})`],
+        ['Período:', reporteData.periodo],
+        ['Año Lectivo:', reporteData.config?.anio_lectivo || 'N/A'],
+        [''],
+        ['CALIFICACIONES POR PERÍODO'],
+        ['']
+      ];
+
+      // Calificaciones por período
+      ['P1', 'P2', 'P3'].forEach(periodo => {
+        const periodoNombre = periodo === 'P1' ? '1er Período' : periodo === 'P2' ? '2do Período' : '3er Período';
+        const competenciasPeriodo = calcularCompetenciasPeriodo(reporteData.estudiante.id, periodo.replace('P', ''));
+
+        infoData.push([periodoNombre]);
+        ['C1', 'C2', 'C3', 'C4'].forEach(comp => {
+          const valorOriginal = competenciasPeriodo[comp] || 0;
+          const recoveryKey = `${reporteData.estudiante.id}-${periodo.replace('P', '')}-${comp}-periodo`;
+          const valorRecuperacion = recuperaciones[recoveryKey];
+          const valorFinal = valorRecuperacion !== undefined ? valorRecuperacion : valorOriginal;
+
+          infoData.push([`${comp} - Original:`, valorOriginal.toFixed(1)]);
+          infoData.push([`${comp} - Recuperación:`, valorRecuperacion !== undefined ? valorRecuperacion.toFixed(1) : '-']);
+          infoData.push([`${comp} - Final:`, valorFinal.toFixed(1)]);
+        });
+        infoData.push(['']);
+      });
+
+      // Comentarios
+      infoData.push(['OBSERVACIONES DEL PROFESOR']);
+      infoData.push([reporteData.comentario || 'Sin comentarios registrados']);
+
+      const wsInfo = XLSX.utils.aoa_to_sheet(infoData);
+      wsInfo['!cols'] = [{ wch: 20 }, { wch: 30 }];
+      XLSX.utils.book_append_sheet(wb, wsInfo, 'Información');
+
+      // Hoja 2: Calificaciones por unidad
+      if (reporteData.unidades.length > 0) {
+        const unidadesData = [['UNIDAD', 'CRITERIO', 'C1', 'C2', 'C3', 'C4', 'VALOR MÁXIMO']];
+
+        reporteData.unidades.forEach(unidad => {
+          unidadesData.push([unidad.nombre, '', '', '', '', '', '']); // Fila de encabezado de unidad
+
+          unidad.criterios.forEach(criterio => {
+            const cal = unidad.calificaciones.find(c => c.criterio_id === criterio.id);
+            const row = [
+              '', // Unidad vacía para criterios
+              criterio.nombre,
+              criterio.competencia_grupo === 'C1' ? (cal ? cal.calificacion.toFixed(parseInt(decimales)) : '-') : '',
+              criterio.competencia_grupo === 'C2' ? (cal ? cal.calificacion.toFixed(parseInt(decimales)) : '-') : '',
+              criterio.competencia_grupo === 'C3' ? (cal ? cal.calificacion.toFixed(parseInt(decimales)) : '-') : '',
+              criterio.competencia_grupo === 'C4' ? (cal ? cal.calificacion.toFixed(parseInt(decimales)) : '-') : '',
+              criterio.valor_maximo
+            ];
+            unidadesData.push(row);
+          });
+
+          // Totales por competencia
+          const competencias = [...new Set(unidad.criterios.map(c => c.competencia_grupo))].sort();
+          const totalRow = ['TOTAL POR COMPETENCIA', '', '', '', '', '', ''];
+          competencias.forEach(comp => {
+            const index = ['C1', 'C2', 'C3', 'C4'].indexOf(comp) + 2; // +2 porque las primeras columnas son Unidad y Criterio
+            if (index >= 2 && index <= 5) {
+              totalRow[index] = calcularTotalCompetencia(unidad, comp).toFixed(parseInt(decimales));
+            }
+          });
+          unidadesData.push(totalRow);
+          unidadesData.push(['']); // Fila vacía
+        });
+
+        const wsUnidades = XLSX.utils.aoa_to_sheet(unidadesData);
+        wsUnidades['!cols'] = [
+          { wch: 20 }, // Unidad
+          { wch: 30 }, // Criterio
+          { wch: 10 }, // C1
+          { wch: 10 }, // C2
+          { wch: 10 }, // C3
+          { wch: 10 }, // C4
+          { wch: 15 }  // Valor máximo
+        ];
+        XLSX.utils.book_append_sheet(wb, wsUnidades, 'Calificaciones');
+      }
+
+      // Generar y descargar archivo
+      const fileName = `reporte_individual_${reporteData.estudiante.nombre_completo.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+
+    } catch (error) {
+      console.error('Error generando Excel individual:', error);
+      alert('Error al generar Excel individual');
+    }
+  };
+
+  const exportToExcelUnidad = () => {
+    if (!reporteUnidadData) {
+      alert('No hay reporte de unidad para exportar');
+      return;
+    }
+
+    try {
+      // Crear workbook
+      const wb = XLSX.utils.book_new();
+
+      // Hoja 1: Información general
+      const infoData = [
+        ['REPORTE DE CALIFICACIONES POR UNIDAD'],
+        [''],
+        ['Curso:', reporteUnidadData.curso.asignaturas.nombre],
+        ['Grupo:', `${reporteUnidadData.curso.grupos.grado}° ${reporteUnidadData.curso.grupos.seccion} (${reporteUnidadData.curso.grupos.nivel})`],
+        ['Unidad:', reporteUnidadData.unidad.nombre],
+        ['Fecha de generación:', new Date().toLocaleDateString('es-DO')],
+        ['']
+      ];
+
+      const wsInfo = XLSX.utils.aoa_to_sheet(infoData);
+      wsInfo['!cols'] = [{ wch: 25 }, { wch: 40 }];
+      XLSX.utils.book_append_sheet(wb, wsInfo, 'Información');
+
+      // Hoja 2: Calificaciones detalladas
+      const calificacionesData = [
+        ['N°', 'ESTUDIANTE', ...reporteUnidadData.criterios.map(c => c.nombre), 'PROMEDIO']
+      ];
+
+      reporteUnidadData.estudiantes.forEach(estudiante => {
+        const calificacionesEstudiante = reporteUnidadData.calificaciones.filter(cal => cal.estudiante_id === estudiante.id);
+        const calificacionesValidas = calificacionesEstudiante.filter(cal => cal.calificacion != null);
+        const total = calificacionesValidas.length > 0
+          ? calificacionesValidas.reduce((sum, cal) => sum + cal.calificacion, 0) / calificacionesValidas.length
+          : 0;
+
+        const row = [
+          estudiante.num_orden,
+          estudiante.nombre_completo,
+          ...reporteUnidadData.criterios.map(criterio => {
+            const cal = calificacionesEstudiante.find(c => c.criterio_id === criterio.id);
+            return cal ? cal.calificacion?.toFixed(parseInt(decimales)) : '-';
+          }),
+          total.toFixed(parseInt(decimales))
+        ];
+
+        calificacionesData.push(row);
+      });
+
+      const wsCalificaciones = XLSX.utils.aoa_to_sheet(calificacionesData);
+      wsCalificaciones['!cols'] = [
+        { wch: 5 }, // N°
+        { wch: 30 }, // Estudiante
+        ...reporteUnidadData.criterios.map(() => ({ wch: 12 })), // Criterios
+        { wch: 10 } // Promedio
+      ];
+      XLSX.utils.book_append_sheet(wb, wsCalificaciones, 'Calificaciones');
+
+      // Generar y descargar archivo
+      const fileName = `reporte_unidad_${reporteUnidadData.unidad.nombre.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+
+    } catch (error) {
+      console.error('Error generando Excel de unidad:', error);
+      alert('Error al generar Excel de unidad');
+    }
+  };
+
+  const exportToExcelOficial = () => {
+    if (!reporteOficialData) {
+      alert('No hay reporte oficial para exportar');
+      return;
+    }
+
+    try {
+      // Crear workbook
+      const wb = XLSX.utils.book_new();
+
+      // Hoja 1: Información general
+      const infoData = [
+        ['REPORTE OFICIAL DE EVALUACIÓN'],
+        [''],
+        ['Curso:', reporteOficialData.curso.asignaturas.nombre],
+        ['Grupo:', `${reporteOficialData.curso.grupos.grado}° ${reporteOficialData.curso.grupos.seccion} (${reporteOficialData.curso.grupos.nivel})`],
+        ['Fecha de generación:', new Date().toLocaleDateString('es-DO')],
+        [''],
+        ['COMPETENCIAS:', reporteOficialData.competencias.join(', ')],
+        ['']
+      ];
+
+      const wsInfo = XLSX.utils.aoa_to_sheet(infoData);
+      wsInfo['!cols'] = [{ wch: 25 }, { wch: 40 }];
+      XLSX.utils.book_append_sheet(wb, wsInfo, 'Información');
+
+      // Hoja 2: Calificaciones oficiales
+      const headers = ['N°', 'ESTUDIANTE'];
+
+      // Agregar headers para cada competencia y período
+      reporteOficialData.competencias.forEach(comp => {
+        headers.push(`${comp} P1`, `RC${comp} P1`);
+      });
+      reporteOficialData.competencias.forEach(comp => {
+        headers.push(`${comp} P2`, `RC${comp} P2`);
+      });
+      reporteOficialData.competencias.forEach(comp => {
+        headers.push(`${comp} P3`, `RC${comp} P3`);
+      });
+      reporteOficialData.competencias.forEach(comp => {
+        headers.push(`${comp} Final`);
+      });
+      headers.push('NOTA FINAL');
+
+      const calificacionesData = [headers];
+
+      reporteOficialData.estudiantes.forEach(estudiante => {
+        const row = [
+          estudiante.num_orden,
+          estudiante.nombre_completo
+        ];
+
+        // Período 1
+        reporteOficialData.competencias.forEach(comp => {
+          row.push(
+            estudiante.periodos.P1[comp]?.toFixed(1) || '-',
+            estudiante.recuperaciones[`${estudiante.id}-1-${comp}-periodo`]?.toFixed(1) || '-'
+          );
+        });
+
+        // Período 2
+        reporteOficialData.competencias.forEach(comp => {
+          row.push(
+            estudiante.periodos.P2[comp]?.toFixed(1) || '-',
+            estudiante.recuperaciones[`${estudiante.id}-2-${comp}-periodo`]?.toFixed(1) || '-'
+          );
+        });
+
+        // Período 3
+        reporteOficialData.competencias.forEach(comp => {
+          row.push(
+            estudiante.periodos.P3[comp]?.toFixed(1) || '-',
+            estudiante.recuperaciones[`${estudiante.id}-3-${comp}-periodo`]?.toFixed(1) || '-'
+          );
+        });
+
+        // Finales
+        reporteOficialData.competencias.forEach(comp => {
+          row.push(estudiante.finales[comp]?.toFixed(1) || '-');
+        });
+
+        // Nota final
+        row.push(estudiante.calificacionFinal?.toFixed(1) || '-');
+
+        calificacionesData.push(row);
+      });
+
+      const wsCalificaciones = XLSX.utils.aoa_to_sheet(calificacionesData);
+      // Configurar anchos de columna
+      const colWidths = [
+        { wch: 5 }, // N°
+        { wch: 30 }, // Estudiante
+      ];
+
+      // Anchos para competencias (2 columnas por competencia por período)
+      const numCompetencias = reporteOficialData.competencias.length;
+      for (let i = 0; i < numCompetencias * 2 * 3 + numCompetencias + 1; i++) {
+        colWidths.push({ wch: 8 });
+      }
+
+      wsCalificaciones['!cols'] = colWidths;
+      XLSX.utils.book_append_sheet(wb, wsCalificaciones, 'Calificaciones Oficiales');
+
+      // Generar y descargar archivo
+      const fileName = `reporte_oficial_${reporteOficialData.curso.asignaturas.nombre.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+
+    } catch (error) {
+      console.error('Error generando Excel oficial:', error);
+      alert('Error al generar Excel oficial');
+    }
+  };
+
   const calcularCompetenciasUnidad = (estudianteId, unidadId) => {
     const competencias = {};
     ['C1','C2','C3','C4'].forEach(comp => competencias[comp] = 0);
@@ -608,6 +899,26 @@ function Reportes() {
     });
 
     return competencias;
+  };
+
+  // Función para ordenar estudiantes por nombre o apellido
+  const ordenarEstudiantes = (estudiantes, orden) => {
+    if (!orden || orden === 'num_orden') {
+      return estudiantes.sort((a, b) => a.num_orden - b.num_orden);
+    }
+
+    return estudiantes.sort((a, b) => {
+      if (orden === 'nombre') {
+        const nombreA = a.nombre_completo.split(' ')[0].toLowerCase();
+        const nombreB = b.nombre_completo.split(' ')[0].toLowerCase();
+        return nombreA.localeCompare(nombreB);
+      } else if (orden === 'apellido') {
+        const apellidoA = a.nombre_completo.split(' ').slice(-1)[0].toLowerCase();
+        const apellidoB = b.nombre_completo.split(' ').slice(-1)[0].toLowerCase();
+        return apellidoA.localeCompare(apellidoB);
+      }
+      return 0;
+    });
   };
 
   const calcularTotalGeneral = (competencia) => {
@@ -755,6 +1066,9 @@ function Reportes() {
             <button onClick={exportToPDF} style={{ padding: '0.5rem 1rem', background: '#dc3545', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '0.9rem' }}>
               📄 Exportar PDF
             </button>
+            <button onClick={exportToExcelIndividual} style={{ padding: '0.5rem 1rem', background: '#217346', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '0.9rem' }}>
+              📊 Exportar Excel
+            </button>
           </div>
         )}
 
@@ -765,6 +1079,9 @@ function Reportes() {
             </button>
             <button onClick={() => exportToPDFOficial()} style={{ padding: '0.5rem 1rem', background: '#6f42c1', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '0.9rem' }}>
               📄 Exportar PDF Oficial
+            </button>
+            <button onClick={exportToExcelOficial} style={{ padding: '0.5rem 1rem', background: '#0d6efd', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '0.9rem' }}>
+              📊 Exportar Excel Oficial
             </button>
           </div>
         )}
@@ -777,6 +1094,9 @@ function Reportes() {
             </button>
             <button onClick={exportToPDF} style={{ padding: '0.5rem 1rem', background: '#dc3545', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '0.9rem' }}>
               📄 Exportar PDF
+            </button>
+            <button onClick={exportToExcelUnidad} style={{ padding: '0.5rem 1rem', background: '#198754', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: '600', fontSize: '0.9rem' }}>
+              📊 Exportar Excel
             </button>
           </div>
         )}
